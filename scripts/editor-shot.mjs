@@ -1,6 +1,7 @@
 // 开发用：用无头 Chrome 打开打包好的编辑器（editor/dist），放进一篇 Markdown，截图。
-// 用法：node scripts/editor-shot.mjs <笔记.md> <输出.png> [--dark] [--cursor <文字>] [--size 宽x高] [--dir 文件夹]
+// 用法：node scripts/editor-shot.mjs <笔记.md> <输出.png> [--dark] [--cursor <文字>] [--select <起> <止>] [--size 宽x高] [--dir 文件夹]
 //   --cursor：把光标放在第一次出现这段文字的地方（看源码露出来的样子）
+//   --select：从第一次出现“起”的地方选到第一次出现“止”的末尾（看选区的样子）
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,6 +13,8 @@ const args = process.argv.slice(2);
 const flag = name => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : null; };
 const dark = args.includes('--dark') && args.splice(args.indexOf('--dark'), 1);
 const cursor = flag('--cursor');
+const selectAt = args.indexOf('--select');
+const select = selectAt >= 0 ? args.splice(selectAt, 3).slice(1) : null;
 const [width, height] = (flag('--size') ?? '900x1400').split('x').map(Number);
 const dir = flag('--dir') ?? '';
 const [input, output] = args;
@@ -74,6 +77,15 @@ if (cursor) {
     if (at < 0) throw new Error('找不到光标位置');
     v.focus();
     v.dispatch({ selection: { anchor: at } });
+  })()`);
+}
+if (select) {
+  await run(`(() => {
+    const v = window.bettermd.view, text = v.state.doc.toString();
+    const from = text.indexOf(${JSON.stringify(select[0])}), end = text.indexOf(${JSON.stringify(select[1])});
+    if (from < 0 || end < 0) throw new Error('找不到要选的文字');
+    v.focus();
+    v.dispatch({ selection: { anchor: from, head: end + ${JSON.stringify(select[1])}.length } });
   })()`);
 }
 await delay(900);

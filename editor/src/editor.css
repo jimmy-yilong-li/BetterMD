@@ -10,7 +10,8 @@
   --marker: #C9BFAF;
   --sep: rgba(70, 45, 20, .11);
   --field: rgba(70, 45, 20, .065);
-  --code-bg: #F2EDE3;
+  /* 底色用半透明：选区画在文字下面一层，不透明的底色会把选区盖住，看起来就像选不中 */
+  --code-bg: rgba(110, 75, 30, .065);
   --fig-bg: #F7F3EB;
   --sel: color-mix(in srgb, var(--accent) 16%, transparent);
   --emboss: 0 1px 0 rgba(255, 255, 255, .75);
@@ -33,7 +34,7 @@
     --marker: #5F584F;
     --sep: rgba(255, 240, 220, .09);
     --field: rgba(255, 240, 220, .07);
-    --code-bg: #25221F;
+    --code-bg: rgba(255, 240, 220, .047);
     --fig-bg: #211E1B;
     --sel: color-mix(in srgb, var(--accent) 26%, transparent);
     --emboss: 0 -1px 0 rgba(0, 0, 0, .55);
@@ -81,13 +82,13 @@ body::before {
   overflow-x: hidden;
 }
 
+/* 正文一栏最宽 700px，两边至少留 --gutter（挂标题的 #、折叠箭头放在这里）。
+   留白用外边距，不用内边距：CodeMirror 画整行选区时从正文框的边开始画，内边距会让选区伸到留白里。 */
 #editor .cm-content {
   --gutter: clamp(44px, 7vw, 80px);
   box-sizing: border-box;
-  width: 100%;
-  max-width: calc(700px + 2 * var(--gutter));
-  margin: 0 auto;
-  padding: 40px var(--gutter) 45vh;
+  margin: 0 max(var(--gutter), calc((100% - 700px) / 2));
+  padding: 40px 0 45vh;
   caret-color: var(--accent);
   letter-spacing: .012em;
   text-align: left;

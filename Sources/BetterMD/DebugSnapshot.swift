@@ -5,7 +5,8 @@ import WebKit
 /// 开发用：启动参数 `-snapshotPath /某处/图.png` 会在窗口出现两秒后，把整个窗口画成图片存下来，
 /// 并在旁边写一份 `.txt`：每个列表实际有几行、AppModel 里有哪些笔记、编辑器网页里渲染出了什么。
 /// 编辑器（WKWebView）画不进窗口图，另存成 `图-editor.png`。然后退出。
-/// 另外两个可选参数：`-snapshotNote 标题里的字` 先选中这篇笔记；`-snapshotAppearance dark` 用深色外观。
+/// 可选参数：`-snapshotNote 标题里的字` 先选中这篇笔记；`-snapshotAppearance dark` 用深色外观；
+/// `-snapshotSelect "起|止"` 在编辑器里从“起”选到“止”（看选区的样子）。
 /// 没有屏幕录制权限时，用它检查界面。正常启动不受影响。
 enum DebugSnapshot {
     @MainActor
@@ -22,6 +23,18 @@ enum DebugSnapshot {
         }
         try? await Task.sleep(for: .seconds(2.5))
         defer { NSApplication.shared.terminate(nil) }
+        if let range = defaults.string(forKey: "snapshotSelect"), let window = NSApplication.shared.windows.first(where: { $0.isVisible }),
+           let web = window.contentView.flatMap(firstWebView) {
+            let parts = range.components(separatedBy: "|")
+            window.makeFirstResponder(web)
+            _ = try? await web.callAsyncJavaScript("""
+                const v = window.bettermd.view, text = v.state.doc.toString();
+                const from = text.indexOf(start), end = text.indexOf(stop);
+                v.focus();
+                if (from >= 0 && end >= 0) v.dispatch({ selection: { anchor: from, head: end + stop.length } });
+                """, arguments: ["start": parts.first ?? "", "stop": parts.last ?? ""], contentWorld: .page)
+            try? await Task.sleep(for: .seconds(0.6))
+        }
         let target = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         guard let window = NSApplication.shared.windows.first(where: { $0.isVisible }),
               let view = window.contentView?.superview ?? window.contentView else { return }
