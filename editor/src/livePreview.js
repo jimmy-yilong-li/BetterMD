@@ -59,7 +59,14 @@ function build(state) {
     const line = doc.lineAt(pos);
     return touches(line.from, line.to);
   };
-  const add = (deco, from, to = from) => out.push(deco.range(from, to));
+  // 空的标记（比如 [](网址) 的链接文字、没写字的待办）CodeMirror 不接受，会抛错，直接跳过
+  const add = (deco, from, to = from) => {
+    try {
+      out.push(deco.range(from, to));
+    } catch {
+      // 无效范围：不加这个装饰
+    }
+  };
   const eachLine = (from, to, fn) => {
     for (let pos = from; pos <= to;) {
       const line = doc.lineAt(pos);
@@ -309,15 +316,25 @@ function listDepth(item) {
   return Math.max(0, depth - 1);
 }
 
+/** 排版效果出了意外的错，宁可少显示一点，也不能让编辑器本身坏掉（打字、保存都靠它）。 */
+function safeBuild(state, fallback) {
+  try {
+    return build(state);
+  } catch (error) {
+    console.error('BetterMD：排版效果出错，这次先不显示', error);
+    return fallback;
+  }
+}
+
 export const livePreview = StateField.define({
-  create: build,
+  create: state => safeBuild(state, Decoration.none),
   update(deco, tr) {
     const changed = tr.docChanged || tr.selection
       || syntaxTree(tr.state) !== syntaxTree(tr.startState)
       || tr.state.field(focusState) !== tr.startState.field(focusState)
       || tr.state.field(dirState) !== tr.startState.field(dirState)
       || foldedRanges(tr.state) !== foldedRanges(tr.startState);
-    return changed ? build(tr.state) : deco;
+    return changed ? safeBuild(tr.state, deco.map(tr.changes)) : deco;
   },
   provide: field => EditorView.decorations.from(field),
 });
@@ -346,11 +363,20 @@ function mathTip(state) {
   return null;
 }
 
+function safeTip(state) {
+  try {
+    return mathTip(state);
+  } catch (error) {
+    console.error('BetterMD：公式预览出错', error);
+    return null;
+  }
+}
+
 export const mathTooltip = StateField.define({
-  create: mathTip,
+  create: safeTip,
   update(tip, tr) {
     if (!tr.docChanged && !tr.selection && tr.state.field(focusState) === tr.startState.field(focusState)) return tip;
-    return mathTip(tr.state);
+    return safeTip(tr.state);
   },
   provide: field => showTooltip.from(field),
 });

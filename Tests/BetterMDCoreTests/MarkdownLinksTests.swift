@@ -38,6 +38,22 @@ struct MarkdownLinksTests {
         #expect(lines[2] == "![](附件/代码块里的.png)")
     }
 
+    @Test func hashAndQuestionMarkInFileNamesAreEscaped() {
+        #expect(MarkdownLinks.link(from: "", to: "附件/C# 笔记?.pdf") == "附件/C%23%20笔记%3F.pdf")
+        #expect(MarkdownLinks.rebase("![](附件/C%23.png)", from: "", to: "工作") == "![](../附件/C%23.png)")
+    }
+
+    @Test func parenthesesInsidePaths() {
+        #expect(MarkdownLinks.rebase("![](图(1).png) 后面", from: "工作", to: "")
+            == "![](工作/图%281%29.png) 后面")
+    }
+
+    @Test func referenceDefinitionsMoveToo() {
+        let text = "看图 ![a][r]\n\n[r]: 附件/a.png \"标题\"\n[^1]: 脚注不是链接\n[注]: 这是说明\n[站]: https://example.com"
+        let moved = MarkdownLinks.rebase(text, from: "", to: "工作")
+        #expect(moved == "看图 ![a][r]\n\n[r]: ../附件/a.png \"标题\"\n[^1]: 脚注不是链接\n[注]: 这是说明\n[站]: https://example.com")
+    }
+
     @Test func keepsPercentEncodingValid() {
         let text = "![](附件/my%20pic.png) ![](附件/100%.png)"
         #expect(MarkdownLinks.rebase(text, from: "", to: "工作") == "![](../附件/my%20pic.png) ![](../附件/100%25.png)")

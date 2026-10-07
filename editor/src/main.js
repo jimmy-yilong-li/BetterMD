@@ -102,55 +102,60 @@ const memory = new Map();
 
 // ---- 编辑器 → App ----
 
-let changedWhileComposing = false;
+/** 发出去的改动的编号。App 放内容进来时带上它收到的最大编号，编辑器据此判断那份内容是不是过时了。 */
+let sentSeq = 0;
+/** 输入法拼字期间改了正文、还没发出去。 */
+let pendingWhileComposing = false;
 
 function onUpdate(update) {
-  if (!update.docChanged || !current.id) return;
-  if (update.transactions.every(tr => !tr.docChanged || tr.annotation(fromApp))) return;
+  if (!current.id) return;
+  const typed = update.transactions.some(tr => tr.docChanged && !tr.annotation(fromApp));
   // 中文输入法还在拼的时候先不发，选完字再发，免得把拼音存进文件
-  if (update.view.composing) { changedWhileComposing = true; return; }
-  sendText();
+  if (update.view.composing) {
+    if (typed) pendingWhileComposing = true;
+    return;
+  }
+  if (typed || pendingWhileComposing) sendText();
 }
 
 function onCompositionEnd() {
-  setTimeout(() => {
-    if (changedWhileComposing && !view.composing) {
-      changedWhileComposing = false;
-      sendText();
-    }
-  });
+  // 选完字以后 CodeMirror 才把最后的文字写进正文，等它一下
+  setTimeout(flushComposing);
+}
+
+/** 拼字期间攒下的改动，拼完了就发出去。 */
+function flushComposing() {
+  if (pendingWhileComposing && !view.composing) sendText();
 }
 
 function sendText() {
-  post({ type: 'change', id: current.id, text: view.state.doc.toString() });
+  pendingWhileComposing = false;
+  if (!current.id) return;
+  sentSeq += 1;
+  post({ type: 'change', id: current.id, text: view.state.doc.toString(), seq: sentSeq });
 }
 
 // ---- App → 编辑器 ----
 
-/** 打开一篇笔记，或者把这篇笔记换成 App 那边的最新内容。options：dir、readOnly、selectTitle。 */
-function setDocument(id, text, options = {}) {
+/**
+ * 打开一篇笔记，或者把正在编辑的这篇换成 App 那边的最新内容（比如在别的程序里改过）。
+ * options：dir 所在文件夹，readOnly 只读，selectTitle 选中标题，seq App 收到的最大改动编号。
+ */
+function setDocument(id, rawText, options = {}) {
+  const text = normalize(rawText);
   const dir = options.dir ?? '';
   const ro = !!options.readOnly;
+  flushComposing();
   if (id === current.id) {
-    const effects = [];
-    if (dir !== current.dir) effects.push(setDir.of(dir));
-    if (ro !== current.readOnly) effects.push(readOnly.reconfigure(readOnlyConfig(ro)));
-    const old = view.state.doc.toString();
-    const changes = old === text ? [] : [minimalChange(old, text)];
-    if (changes.length || effects.length) {
-      view.dispatch({ changes, effects, annotations: [fromApp.of(true), Transaction.addToHistory.of(false)] });
-    }
-    current = { id, dir, readOnly: ro };
+    updateDocument(text, dir, ro, options.seq);
     return;
   }
-  if (current.id) {
-    memory.set(current.id, {
-      text: view.state.doc.toString(), selection: view.state.selection.toJSON(), scroll: view.scrollSnapshot(),
-    });
-  }
-  changedWhileComposing = false;
+  // 先建好新笔记的编辑器状态；换的过程中 current 不指向任何笔记，万一出错，打的字也不会记到别的笔记上
+  const state = makeState(text, dir, ro);
+  remember();
+  current = { id: null, dir: '', readOnly: true };
+  view.setState(state);
   current = { id, dir, readOnly: ro };
-  view.setState(makeState(text, dir, ro));
   const saved = memory.get(id);
   if (saved && saved.text === text) {
     view.dispatch({ selection: EditorSelection.fromJSON(saved.selection), effects: saved.scroll });
@@ -165,6 +170,26 @@ function setDocument(id, text, options = {}) {
   host.classList.add('enter');
 }
 
+/** 同一篇笔记，App 那边有了新内容。 */
+function updateDocument(text, dir, ro, seq) {
+  const effects = [];
+  if (dir !== current.dir) effects.push(setDir.of(dir));
+  if (ro !== current.readOnly) effects.push(readOnly.reconfigure(readOnlyConfig(ro)));
+  const old = view.state.doc.toString();
+  // App 是在收到我们最新的改动之前做的这份内容：刚打的字比它新，不能被盖掉。
+  // 这时只更新文件夹和只读状态，再把正文重发一遍，让 App 以编辑器里的为准。
+  const stale = typeof seq === 'number' && seq < sentSeq;
+  const changes = stale || old === text ? [] : [minimalChange(old, text)];
+  if (changes.length || effects.length) {
+    view.dispatch({ changes, effects, annotations: [fromApp.of(true), Transaction.addToHistory.of(false)] });
+  }
+  current = { ...current, dir, readOnly: ro };
+  if (stale && old !== text) sendText();
+}
+
+/** CodeMirror 里只有 \n 一种换行；Windows 的 \r\n 先换掉，不然对比内容时会多出空行。 */
+const normalize = text => String(text ?? '').replace(/\r\n?/g, '\n');
+
 /** 只替换真正变了的那一段，光标和滚动位置不乱跳。 */
 function minimalChange(a, b) {
   let start = 0;
@@ -175,13 +200,18 @@ function minimalChange(a, b) {
   return { from: start, to: endA, insert: b.slice(start, endB) };
 }
 
+/** 记住这篇笔记的光标和滚动位置，回来时正文没变就恢复。 */
+function remember() {
+  if (!current.id) return;
+  memory.set(current.id, {
+    text: view.state.doc.toString(), selection: view.state.selection.toJSON(), scroll: view.scrollSnapshot(),
+  });
+}
+
 /** 没有选中笔记时：清空，只读。 */
 function clear() {
-  if (current.id) {
-    memory.set(current.id, {
-      text: view.state.doc.toString(), selection: view.state.selection.toJSON(), scroll: view.scrollSnapshot(),
-    });
-  }
+  flushComposing();
+  remember();
   current = { id: null, dir: '', readOnly: true };
   view.setState(makeState('', '', true));
 }

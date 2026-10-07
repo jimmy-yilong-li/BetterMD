@@ -241,12 +241,19 @@ public struct NoteStore: Sendable {
     }
 
     /// 先按 UTF-8 读，不行再按 GB18030；都不行返回 nil。
+    /// Windows 的换行（\r\n）和老 Mac 的换行（\r）统一成 \n：编辑器里只有 \n，两边对比内容时才对得上。
+    /// 文件本身不动，下次保存时才写成 \n。
     func readText(_ url: URL) -> String? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        if let text = String(data: data, encoding: .utf8) { return text }
         let gb18030 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
             CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
-        return String(data: data, encoding: gb18030)
+        guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: gb18030) else { return nil }
+        // （按字节查 \r：Swift 里 \r\n 是一个字符，按字符查找不到单独的 \r）
+        return text.utf8.contains(13) ? Self.normalizeNewlines(text) : text
+    }
+
+    static func normalizeNewlines(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
     }
 
     /// 根目录下不能叫「附件」「废纸篓」，遇到就加“ 文件夹”。

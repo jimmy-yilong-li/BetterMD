@@ -85,4 +85,12 @@ struct NoteStoreLoadTests {
         try store.saveState(state)
         #expect(store.loadState() == state)
     }
+
+    @Test func windowsLineEndingsAreReadAsPlainNewlines() throws {
+        let root = try TempDir.make()
+        try Data("# 标题\r\n第一行\r\n第二行\r老 Mac 的换行".utf8).write(to: root.appendingPathComponent("crlf.md"))
+        let note = try #require(try NoteStore(root: root).load().notes.first)
+        #expect(note.text == "# 标题\n第一行\n第二行\n老 Mac 的换行")
+        #expect(note.title == "标题")
+    }
 }

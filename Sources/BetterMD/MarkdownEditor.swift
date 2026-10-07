@@ -55,6 +55,8 @@ struct MarkdownEditor: NSViewRepresentable {
         weak var webView: WKWebView?
         private var ready = false
         private var shown: Shown?
+        /// 收到的最大改动编号。放内容进网页时带上它：网页里如果有更新的改动还没送到，就不会被这份内容盖掉。
+        private var lastSeq = 0
         /// 网页还没准备好时要显示的笔记，准备好以后补上。
         private var wanted: (note: Note?, selectTitle: Bool) = (nil, false)
 
@@ -77,11 +79,19 @@ struct MarkdownEditor: NSViewRepresentable {
             guard next != shown else { return }
             let opening = next.id != shown?.id
             shown = next
-            let options: [String: Any] = ["dir": next.dir, "readOnly": next.readOnly, "selectTitle": opening && selectTitle]
+            let options: [String: Any] = [
+                "dir": next.dir, "readOnly": next.readOnly, "selectTitle": opening && selectTitle, "seq": lastSeq,
+            ]
             webView.callAsyncJavaScript(
                 "window.bettermd.setDocument(id, text, options)",
                 arguments: ["id": note.id.uuidString, "text": note.text, "options": options],
-                in: nil, in: .page, completionHandler: nil)
+                in: nil, in: .page
+            ) { [weak self] result in
+                // 网页没能放进这篇笔记：忘掉“已经放进去了”，下次界面刷新时重放；同时告诉用户
+                guard case .failure(let error) = result, let self, self.shown?.id == next.id else { return }
+                self.shown = nil
+                self.model.lastError = "编辑器没能打开这篇笔记：\(error.localizedDescription)"
+            }
             if opening && selectTitle { webView.window?.makeFirstResponder(webView) }
         }
 
@@ -95,8 +105,10 @@ struct MarkdownEditor: NSViewRepresentable {
             case "ready":
                 ready = true
                 shown = nil
+                lastSeq = 0
                 show(wanted.note, selectTitle: wanted.selectTitle)
             case "change":
+                if let seq = body["seq"] as? Int { lastSeq = max(lastSeq, seq) }
                 if let id, let text = body["text"] as? String {
                     if shown?.id == id { shown?.text = text }
                     model.updateText(text, for: id)
