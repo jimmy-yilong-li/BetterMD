@@ -107,3 +107,31 @@ struct AppModelTests {
         #expect(model.selectedID == id)
     }
 }
+
+@MainActor
+struct AppModelEditorTests {
+    @Test func newNoteIsFreshUntilYouLeaveIt() throws {
+        let root = try TempDir.make()
+        try root.write("# 甲", to: "甲.md")
+        let model = AppModel(root: root)
+        model.load()
+        model.newNote()
+        let fresh = try #require(model.selectedID)
+        #expect(model.freshNoteID == fresh)
+        let other = try #require(model.notes.first { $0.id != fresh })
+        model.select(other.id)
+        #expect(model.freshNoteID == nil)
+    }
+
+    @Test func attachmentLinkStartsFromTheNotesFolder() throws {
+        let root = try TempDir.make()
+        try root.write("# 周会", to: "工作/客户/周会.md")
+        let model = AppModel(root: root)
+        model.load()
+        let note = try #require(model.notes.first)
+        let link = try #require(model.addAttachment(Data([1]), fileName: "x.png", for: note.id))
+        #expect(link.hasPrefix("../../附件/"))
+        #expect(link.hasSuffix(".png"))
+        #expect(root.exists(String(link.dropFirst(6))))
+    }
+}

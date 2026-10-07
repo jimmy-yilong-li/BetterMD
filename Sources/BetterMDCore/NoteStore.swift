@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// 读写「我的笔记」目录。App 里只有这里直接碰文件。
 public struct NoteStore: Sendable {
@@ -128,6 +129,7 @@ public struct NoteStore: Sendable {
     }
 
     /// 把笔记移到 `folder`（“”是未分类），重名时加序号。从废纸篓移出来就是恢复。
+    /// 正文里的相对链接（图片等）改成从新文件夹出发的写法；移进废纸篓时不改（链接仍按原来的文件夹算）。
     public func move(_ note: Note, toFolder folder: String) throws -> Note {
         guard Note.parentFolder(of: note.path) != folder else { return note }
         let dir = url(for: folder)
@@ -137,6 +139,13 @@ public struct NoteStore: Sendable {
         var moved = note
         moved.path = relativePath(of: target)
         moved.originalFolder = nil
+        if folder != LibraryLayout.trash {
+            let rebased = MarkdownLinks.rebase(note.text, from: note.folder, to: folder)
+            if rebased != note.text {
+                moved.text = rebased
+                moved.modified = try write(moved)
+            }
+        }
         return moved
     }
 
@@ -171,6 +180,54 @@ public struct NoteStore: Sendable {
         guard target.path != current.path else { return path }
         try moveItem(at: current, to: target)
         return relativePath(of: target)
+    }
+
+    /// 把粘贴、拖进来或选来的文件存进「附件/」：图片按时间起名（20261007-153012.png），
+    /// 别的文件保留原名；重名时加 -2、-3。返回相对「我的笔记」的路径，比如“附件/20261007-153012.png”。
+    public func saveAttachment(_ data: Data, fileName: String, mimeType: String? = nil, now: Date = .now) throws -> String {
+        let dir = url(for: LibraryLayout.attachments)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let original = fileName as NSString
+        var ext = original.pathExtension.lowercased()
+        if ext.isEmpty, let mimeType, let preferred = UTType(mimeType: mimeType)?.preferredFilenameExtension {
+            ext = preferred
+        }
+        let isImage = ext.isEmpty ? (mimeType?.hasPrefix("image/") ?? false) : (UTType(filenameExtension: ext)?.conforms(to: .image) ?? false)
+        let base = isImage || original.deletingPathExtension.isEmpty
+            ? Self.timestamp(now)
+            : LibraryLayout.fileName(forTitle: original.deletingPathExtension)
+        var n = 1
+        while true {
+            let name = (n == 1 ? base : "\(base)-\(n)") + (ext.isEmpty ? "" : "." + ext)
+            let target = dir.appendingPathComponent(name)
+            if !FileManager.default.fileExists(atPath: target.path) {
+                try data.write(to: target, options: [.atomic])
+                return LibraryLayout.attachments + "/" + name
+            }
+            n += 1
+        }
+    }
+
+    /// 正文里引用的文件（相对「我的笔记」的路径）在磁盘上的位置。路径不能跳出「我的笔记」。
+    /// 文件不在原处时（比如笔记在 Finder 里被挪过），按文件名到「附件/」里找。都找不到返回 nil。
+    public func resolveFile(_ path: String) -> URL? {
+        let parts = path.split(separator: "/").map(String.init)
+        guard let name = parts.last, !parts.contains(where: { $0 == ".." || $0 == "." }) else { return nil }
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        let direct = url(for: parts.joined(separator: "/"))
+        if fm.fileExists(atPath: direct.path, isDirectory: &isDir), !isDir.boolValue { return direct }
+        let fallback = url(for: LibraryLayout.attachments).appendingPathComponent(name)
+        if fm.fileExists(atPath: fallback.path, isDirectory: &isDir), !isDir.boolValue { return fallback }
+        return nil
+    }
+
+    static func timestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: date)
     }
 
     // MARK: - 内部

@@ -16,6 +16,8 @@ public final class AppModel {
         didSet { if query != oldValue { keepSelectionVisible() } }
     }
     public private(set) var selectedID: Note.ID?
+    /// 刚用 ⌘N 新建、还没离开过的笔记：编辑器打开它时直接选中标题，接着就能打字。
+    public private(set) var freshNoteID: Note.ID?
     public var lastError: String?
     /// 停止输入多久以后自动保存。
     public var saveDelay: Duration = .milliseconds(600)
@@ -70,6 +72,7 @@ public final class AppModel {
         folders = []
         state = LibraryState()
         selectedID = nil
+        freshNoteID = nil
         titleWhenOpened = [:]
         load()
     }
@@ -79,6 +82,7 @@ public final class AppModel {
     public func select(_ id: Note.ID?) {
         guard id != selectedID else { return }
         if let previous = selectedID { finishEditing(previous) }
+        freshNoteID = nil
         selectedID = id
         if let id, let note = notes.first(where: { $0.id == id }) {
             titleWhenOpened[id] = note.parsed.title
@@ -114,8 +118,21 @@ public final class AppModel {
             notes.append(note)
             query = ""
             select(note.id)
+            freshNoteID = note.id
         } catch {
             lastError = "新建笔记失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 把粘贴、拖进来或选来的文件存进「附件/」；返回从这篇笔记所在文件夹指过去的链接（失败返回 nil）。
+    public func addAttachment(_ data: Data, fileName: String, mimeType: String? = nil, for id: Note.ID) -> String? {
+        guard let note = notes.first(where: { $0.id == id }) else { return nil }
+        do {
+            let path = try store.saveAttachment(data, fileName: fileName, mimeType: mimeType)
+            return MarkdownLinks.link(from: note.folder, to: path)
+        } catch {
+            lastError = "保存附件失败：\(error.localizedDescription)"
+            return nil
         }
     }
 
