@@ -35,6 +35,16 @@ const tricky = [
   '<https://x.com>',
   '~~~~',
   'x^y^ 和 a~b~',
+  '\\(',
+  '\\( x \\)',
+  '\\[',
+  '\\[\n',
+  '\\[ x \\]',
+  '\\begin{equation}',
+  '\\begin{equation}\nx\n\\end{equation}',
+  '```math\n',
+  '```math\nx^2\n```',
+  '$ x $ 和 $ 1 $',
   '# 标题\n\n![图](附件/a.png)\n\n| 名 | $x$ |\n|:-:|--:|\n| 1 | **2** |\n\n$$\n\\int f\n$$\n\n- [x] 完成\n- [ ] 待办 #标签\n\n```python\nprint(1)\n```\n\n> 引用 [链接](a.md)\n\n---\n',
 ];
 

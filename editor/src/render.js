@@ -1,7 +1,7 @@
 // 把 Markdown 片段画成网页元素：KaTeX 公式，以及表格单元格里的行内格式（粗体、链接、代码、公式……）。
 import katex from 'katex';
 import { parser, GFM } from '@lezer/markdown';
-import { mathSyntax, texOf } from './math.js';
+import { mathSyntax, texOf, isDisplayMath } from './math.js';
 import { resolveTarget, libraryURL } from './helpers.js';
 
 const texCache = new Map();
@@ -62,7 +62,7 @@ export function renderInline(text, dir = '') {
       const src = text.slice(node.from, node.to);
       const el = document.createElement('span');
       el.className = 'cm-math-inline';
-      el.innerHTML = texHTML(texOf(src), src.startsWith('$$'));
+      el.innerHTML = texHTML(texOf(src), isDisplayMath(src));
       parent.append(el);
     } else if (name === 'Link' || name === 'Image') {
       const marks = node.getChildren('LinkMark');

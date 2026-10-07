@@ -3,7 +3,7 @@
 import { StateField, StateEffect } from '@codemirror/state';
 import { EditorView, Decoration, showTooltip } from '@codemirror/view';
 import { syntaxTree, foldedRanges, foldable } from '@codemirror/language';
-import { texOf } from './math.js';
+import { texOf, isDisplayMath } from './math.js';
 import { texHTML } from './render.js';
 import { findTags, resolveTarget, libraryURL } from './helpers.js';
 import {
@@ -11,7 +11,7 @@ import {
 } from './widgets.js';
 
 // ---- 编辑器有没有焦点：没焦点时什么都不算“正在编辑”，整篇都显示排版效果 ----
-const setFocus = StateEffect.define();
+export const setFocus = StateEffect.define();
 export const focusState = StateField.define({
   create: () => false,
   update(value, tr) {
@@ -220,6 +220,18 @@ function build(state) {
         }
         case 'FencedCode': {
           const active = touches(from, to);
+          const lang = node.node.getChild('CodeInfo');
+          if (lang && /^(math|katex)$/i.test(doc.sliceString(lang.from, lang.to).trim())) {
+            // ```math（GitHub 的写法）：当成公式块
+            const body = node.node.getChild('CodeText');
+            const tex = body ? doc.sliceString(body.from, body.to).trim() : '';
+            const block = ownsLines(from, to);
+            if (!active && block) {
+              replaceBlock(new MathWidget(tex, true, true), from, to);
+              return false;
+            }
+            if (block) add(Decoration.widget({ widget: new MathPreviewWidget(tex), block: true, side: 1 }), to);
+          }
           const first = doc.lineAt(from), last = doc.lineAt(to);
           const marks = node.node.getChildren('CodeMark');
           const info = node.node.getChild('CodeInfo');
@@ -283,7 +295,7 @@ function build(state) {
           if (touches(from, to)) {
             add(mark('cm-math-src-inline'), from, to);
           } else {
-            add(Decoration.replace({ widget: new MathWidget(texOf(src), src.startsWith('$$'), false) }), from, to);
+            add(Decoration.replace({ widget: new MathWidget(texOf(src), isDisplayMath(src), false) }), from, to);
           }
           return false;
         }
@@ -355,7 +367,7 @@ function mathTip(state) {
       create: () => {
         const dom = document.createElement('div');
         dom.className = 'cm-math-tip';
-        dom.innerHTML = texHTML(texOf(src), src.startsWith('$$'));
+        dom.innerHTML = texHTML(texOf(src), isDisplayMath(src));
         return { dom };
       },
     };

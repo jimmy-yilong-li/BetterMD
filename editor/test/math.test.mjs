@@ -76,3 +76,39 @@ test('取出 LaTeX 源码', () => {
   assert.equal(texOf('$$x$$'), 'x');
   assert.equal(texOf('$$\nx\ny'), 'x\ny');
 });
+
+test('两边都留空格的 $ … $ 也算，但“$ 100 到 $”不算', () => {
+  assert.deepEqual(find('激活函数 $ y = \\max(0, x) $ 很常用', 'InlineMath'), ['$ y = \\max(0, x) $']);
+  assert.deepEqual(find('价格 $ 100 到 $ 200', 'InlineMath'), []);
+  assert.deepEqual(find('$ x$', 'InlineMath'), []);
+  assert.equal(texOf('$ y = x $'), 'y = x');
+});
+
+test('\\( … \\) 和写在一行里的 \\[ … \\]', () => {
+  assert.deepEqual(find('激活函数 \\( y = \\max(0, x) \\) 很常用', 'InlineMath'), ['\\( y = \\max(0, x) \\)']);
+  assert.deepEqual(find('看 \\[ y = x^2 \\] 这里', 'InlineMath'), ['\\[ y = x^2 \\]']);
+  assert.equal(texOf('\\( y = \\frac{1}{2} \\)'), 'y = \\frac{1}{2}');
+  assert.equal(texOf('\\[x^2\\]'), 'x^2');
+});
+
+test('转义的括号不是公式', () => {
+  assert.deepEqual(find('\\[1\\] 参考文献', 'InlineMath'), []);
+  assert.deepEqual(find('\\[1\\] 参考文献', 'BlockMath'), []);
+  assert.deepEqual(find('他说 \\(注\\) 这样', 'InlineMath'), []);
+  assert.deepEqual(find('\\$5 和 \\$6', 'InlineMath'), []);
+});
+
+test('\\[ … \\] 公式块', () => {
+  assert.deepEqual(find('\\[\ny = \\sum_i w_i x_i + b\n\\]\n后面', 'BlockMath'), ['\\[\ny = \\sum_i w_i x_i + b\n\\]']);
+  assert.deepEqual(find('\\[ y = x \\]', 'BlockMath'), ['\\[ y = x \\]']);
+  assert.deepEqual(find('上一段\n\\[\nx\n\\]', 'Paragraph'), ['上一段']);
+  assert.equal(texOf('\\[\ny = x\n\\]'), 'y = x');
+});
+
+test('\\begin{equation} 这类环境直接成段，源码原样交给 KaTeX', () => {
+  const text = '\\begin{equation}\nE = mc^2\n\\end{equation}';
+  assert.deepEqual(find(text + '\n后面', 'BlockMath'), [text]);
+  assert.equal(texOf(text), text);
+  assert.deepEqual(find('\\begin{align*}\na &= b\n\\end{align*}', 'BlockMath').length, 1);
+  assert.deepEqual(find('\\begin{itemize}\n\\item a\n\\end{itemize}', 'BlockMath'), []);
+});

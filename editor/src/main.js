@@ -12,7 +12,7 @@ import {
 import { tags as t } from '@lezer/highlight';
 import { mathSyntax } from './math.js';
 import { codeLanguages } from './languages.js';
-import { livePreview, mathTooltip, focusState, focusTracker, dirState, setDir } from './livePreview.js';
+import { livePreview, mathTooltip, focusState, focusTracker, dirState, setDir, setFocus } from './livePreview.js';
 import { toggleWrap, insertLink, insertMath, setHeading, toggleTodo } from './commands.js';
 import { countParagraphs } from './helpers.js';
 import { post } from './bridge.js';
@@ -68,6 +68,13 @@ const folding = codeFolding({
   },
 });
 
+// 中文输入法里 Shift+4 打出的是 ￥：连打两个 ￥ 就换成 $$（公式块的开头）。单个 ￥ 是价钱，不动。
+const yuanToDollars = EditorView.inputHandler.of((view, from, to, text) => {
+  if (text !== '￥' || view.state.readOnly || view.state.sliceDoc(from - 1, from) !== '￥') return false;
+  view.dispatch({ changes: { from: from - 1, to, insert: '$$' }, selection: { anchor: from + 1 }, userEvent: 'input.type' });
+  return true;
+});
+
 /** 从 App 来的改动，不用再告诉 App。 */
 const fromApp = Annotation.define();
 const readOnly = new Compartment();
@@ -82,6 +89,7 @@ const extensions = [
   syntaxHighlighting(inkStyle),
   focusState, focusTracker, dirState, livePreview, mathTooltip, folding,
   placeholder('开始写…'),
+  yuanToDollars,
   keymap.of([...formatKeys, ...markdownKeymap, ...foldKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
   EditorView.updateListener.of(onUpdate),
   EditorView.domEventHandlers({ mousedown: onMouseDown, paste: onPaste, drop: onDrop, compositionend: onCompositionEnd }),
@@ -155,6 +163,7 @@ function setDocument(id, rawText, options = {}) {
   remember();
   current = { id: null, dir: '', readOnly: true };
   view.setState(state);
+  syncFocus();
   current = { id, dir, readOnly: ro };
   const saved = memory.get(id);
   if (saved && saved.text === text) {
@@ -164,6 +173,7 @@ function setDocument(id, rawText, options = {}) {
     const start = first.from + (/^#{1,6}\s+/.exec(first.text)?.[0].length ?? 0);
     view.dispatch({ selection: { anchor: start, head: first.to } });
     view.focus();
+    syncFocus();
   }
   host.classList.remove('enter');
   void host.offsetWidth;
@@ -214,6 +224,16 @@ function clear() {
   remember();
   current = { id: null, dir: '', readOnly: true };
   view.setState(makeState('', '', true));
+  syncFocus();
+}
+
+/**
+ * 新建的编辑器状态里默认“没有焦点”。编辑器本来就有焦点时（比如边打字边按 ⌘N），
+ * 不会再收到获得焦点的事件，要自己补上；不然排版会以为没在编辑，
+ * 把光标所在的公式块换成排好的公式，接着打的字就跑到别处去了。
+ */
+function syncFocus() {
+  if (view.state.field(focusState) !== view.hasFocus) view.dispatch({ effects: setFocus.of(view.hasFocus) });
 }
 
 // ---- 鼠标：⌘ 点链接或标签、点小标题左边的箭头折叠 ----

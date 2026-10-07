@@ -1,14 +1,103 @@
-// Markdown 里的 LaTeX 公式：行内写 $…$（或 $$…$$），单独成段写 $$…$$。
-// 这是给 @lezer/markdown 的语法扩展，产生 InlineMath、BlockMath 两种节点，两头的 $ 是 *MathMark。
+// Markdown 里的 LaTeX 公式。这是给 @lezer/markdown 的语法扩展，产生 InlineMath、BlockMath 两种节点，
+// 两头的记号是 *MathMark。认这些写法：
+//   行内：$…$、$ … $（两边都留空格）、\(…\)，以及写在一行里的 $$…$$、\[…\]
+//   单独成段：$$ … $$、\[ … \]、\begin{equation} … \end{equation} 这类环境
 import { tags } from '@lezer/highlight';
 
-const DOLLAR = 36, BACKSLASH = 92, NEWLINE = 10;
+const DOLLAR = 36, BACKSLASH = 92, NEWLINE = 10, PAREN_L = 40, PAREN_R = 41, BRACKET_L = 91, BRACKET_R = 93;
 const isSpace = ch => ch === 32 || ch === 9 || ch === 10 || ch === 13;
 const isDigit = ch => ch >= 48 && ch <= 57;
 
-/** 这一行是不是以 $$ 开头（缩进 4 格以上是代码块，不算）。 */
-function isMathFence(line) {
-  return line.next === DOLLAR && line.text.charCodeAt(line.pos + 1) === DOLLAR && line.indent - line.baseIndent < 4;
+/** 内容像不像公式：有反斜杠命令、上下标、等号、花括号或英文字母。用来排除“$ 100 到 $”“\[1\]”这类误判。 */
+export function looksLikeTex(text) {
+  return /[\\^_={}a-zA-Z]/.test(text);
+}
+
+/** 独立排版（居中成段）的公式：$$…$$、\[…\]、\begin{…}。 */
+export function isDisplayMath(src) {
+  return src.startsWith('$$') || src.startsWith('\\[') || src.startsWith('\\begin');
+}
+
+// LaTeX 里单独成段的公式环境（KaTeX 都支持）
+const ENVIRONMENTS = 'equation|equation\\*|align|align\\*|aligned|gather|gather\\*|gathered|multline|multline\\*|alignat|alignat\\*|split|cases|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|array';
+const BEGIN = new RegExp(`^\\\\begin\\{(${ENVIRONMENTS})\\}`);
+
+/**
+ * 这一行是不是公式块的开头。是的话返回 { close, single }：close 是结尾记号；
+ * single 为 true 表示开头结尾写在同一行。不是返回 null。缩进 4 格以上是代码块，不算。
+ */
+function blockOpener(line) {
+  if (line.indent - line.baseIndent >= 4) return null;
+  const text = line.text.slice(line.pos);
+  if (text.startsWith('$$')) {
+    return { open: 2, close: '$$', single: text.indexOf('$$', 2) >= 0 };
+  }
+  if (text.startsWith('\\[')) {
+    const rest = text.slice(2);
+    const end = rest.indexOf('\\]');
+    if (end < 0) return rest.trim() === '' || looksLikeTex(rest) ? { open: 2, close: '\\]', single: false } : null;
+    // 写在一行里：后面不能再有别的字，里面要像公式（“\[1\] 参考文献”是转义的方括号，不是公式）
+    if (rest.slice(end + 2).trim() !== '' || !looksLikeTex(rest.slice(0, end))) return null;
+    return { open: 2, close: '\\]', single: true };
+  }
+  const begin = BEGIN.exec(text);
+  if (begin) {
+    const close = `\\end{${begin[1]}}`;
+    return { open: 0, close, single: text.indexOf(close) >= 0 };
+  }
+  return null;
+}
+
+/** 行内的 $…$；$$…$$ 写在一行里也算（按独立公式排版）。规则同 Pandoc，另外允许两边都留空格的写法。 */
+function dollarMath(cx, pos) {
+  const size = cx.char(pos + 1) === DOLLAR ? 2 : 1;
+  const start = pos + size;
+  const first = cx.char(start);
+  if (first < 0 || first === DOLLAR || first === NEWLINE) return -1;
+  // 开头的 $ 后面紧跟文字时，结尾的 $ 前面也要紧跟文字；开头留了空格（$ x $），结尾也要留
+  const spaced = isSpace(first);
+  for (let i = start; i < cx.end; i++) {
+    const ch = cx.char(i);
+    if (ch === NEWLINE) return -1;
+    if (ch === BACKSLASH) { i++; continue; }
+    if (ch !== DOLLAR) continue;
+    if (size === 2) {
+      if (cx.char(i + 1) !== DOLLAR) continue;
+    } else {
+      // 结尾的 $ 后面紧跟数字的不算（“花了 $5 和 $6”）
+      if (isSpace(cx.char(i - 1)) !== spaced || isDigit(cx.char(i + 1))) continue;
+      if (spaced && !looksLikeTex(cx.slice(start, i))) return -1;
+    }
+    const end = i + size;
+    return cx.addElement(cx.elt('InlineMath', pos, end, [
+      cx.elt('InlineMathMark', pos, start),
+      cx.elt('InlineMathMark', i, end),
+    ]));
+  }
+  return -1;
+}
+
+/** 行内的 \(…\)，以及写在一行里的 \[…\]。里面不像公式的（比如转义的括号“\[1\]”）不算。 */
+function bracketMath(cx, pos) {
+  const kind = cx.char(pos + 1);
+  if (kind !== PAREN_L && kind !== BRACKET_L) return -1;
+  const closer = kind === PAREN_L ? PAREN_R : BRACKET_R;
+  const start = pos + 2;
+  for (let i = start; i < cx.end - 1; i++) {
+    const ch = cx.char(i);
+    if (ch === NEWLINE) return -1;
+    if (ch !== BACKSLASH) continue;
+    if (cx.char(i + 1) === closer) {
+      if (!looksLikeTex(cx.slice(start, i))) return -1;
+      const end = i + 2;
+      return cx.addElement(cx.elt('InlineMath', pos, end, [
+        cx.elt('InlineMathMark', pos, start),
+        cx.elt('InlineMathMark', i, end),
+      ]));
+    }
+    i++; // 跳过反斜杠后面的那个字符（\\、\{ 之类）
+  }
+  return -1;
 }
 
 export const mathSyntax = {
@@ -20,53 +109,34 @@ export const mathSyntax = {
   ],
   parseInline: [{
     name: 'InlineMath',
-    // 规则同 Pandoc：开头的 $ 后面不能是空白，结尾的 $ 前面不能是空白、后面不能紧跟数字，
-    // 所以“花了 $5 和 $6”不是公式。\$ 是转义的美元符号。行内公式不跨行。
     parse(cx, next, pos) {
-      if (next !== DOLLAR) return -1;
-      const size = cx.char(pos + 1) === DOLLAR ? 2 : 1;
-      const start = pos + size;
-      const first = cx.char(start);
-      if (first < 0 || isSpace(first) || first === DOLLAR) return -1;
-      for (let i = start; i < cx.end; i++) {
-        const ch = cx.char(i);
-        if (ch === NEWLINE) return -1;
-        if (ch === BACKSLASH) { i++; continue; }
-        if (ch !== DOLLAR) continue;
-        if (size === 2) {
-          if (cx.char(i + 1) !== DOLLAR) continue;
-        } else if (isSpace(cx.char(i - 1)) || isDigit(cx.char(i + 1))) {
-          continue;
-        }
-        const end = i + size;
-        return cx.addElement(cx.elt('InlineMath', pos, end, [
-          cx.elt('InlineMathMark', pos, start),
-          cx.elt('InlineMathMark', i, end),
-        ]));
-      }
+      if (next === DOLLAR) return dollarMath(cx, pos);
+      if (next === BACKSLASH) return bracketMath(cx, pos);
       return -1;
     },
-    before: 'Emphasis',
+    // 要排在“转义”前面：\( 本来会被当成转义的括号
+    before: 'Escape',
   }],
   parseBlock: [{
     name: 'BlockMath',
-    // 从 $$ 开头的行，到下一个含 $$ 的行为止；没有结尾就一直到文末（和代码块一样）。
+    // 从开头那一行，到含结尾记号的那一行为止；没有结尾就一直到文末（和代码块一样）。
     parse(cx, line) {
-      if (!isMathFence(line)) return false;
+      const opener = blockOpener(line);
+      if (!opener) return false;
       const from = cx.lineStart + line.pos;
-      const marks = [cx.elt('BlockMathMark', from, from + 2)];
-      const close = line.text.indexOf('$$', line.pos + 2);
+      const marks = opener.open ? [cx.elt('BlockMathMark', from, from + opener.open)] : [];
       let to = cx.lineStart + line.text.length;
-      if (close >= 0) {
-        marks.push(cx.elt('BlockMathMark', cx.lineStart + close, cx.lineStart + close + 2));
+      if (opener.single) {
+        const close = line.text.indexOf(opener.close, line.pos + Math.max(opener.open, 1));
+        if (opener.open) marks.push(cx.elt('BlockMathMark', cx.lineStart + close, cx.lineStart + close + opener.close.length));
         cx.nextLine();
       } else {
         while (cx.nextLine() && line.depth >= cx.stack.length) {
           for (const m of line.markers) marks.push(m);
           to = cx.lineStart + line.text.length;
-          const end = line.text.indexOf('$$', line.basePos);
+          const end = line.text.indexOf(opener.close, line.basePos);
           if (end >= 0) {
-            marks.push(cx.elt('BlockMathMark', cx.lineStart + end, cx.lineStart + end + 2));
+            if (opener.open) marks.push(cx.elt('BlockMathMark', cx.lineStart + end, cx.lineStart + end + opener.close.length));
             cx.nextLine();
             break;
           }
@@ -75,16 +145,21 @@ export const mathSyntax = {
       cx.addElement(cx.elt('BlockMath', from, to, marks));
       return true;
     },
-    endLeaf: (cx, line) => isMathFence(line),
+    endLeaf: (cx, line) => blockOpener(line) !== null,
     before: 'FencedCode',
   }],
 };
 
-/** 公式节点里的 LaTeX 源码（去掉两头的 $）。`text` 是节点对应的原文。 */
+/** 公式节点里的 LaTeX 源码：去掉两头的 $、\( \)、\[ \]；\begin{…}…\end{…} 原样保留（KaTeX 认识这些环境）。 */
 export function texOf(text) {
-  const open = text.startsWith('$$') ? 2 : 1;
-  let body = text.slice(open);
-  const close = body.lastIndexOf('$'.repeat(open));
-  if (close >= 0) body = body.slice(0, close);
-  return body.trim();
+  const src = text.trim();
+  if (src.startsWith('\\begin')) return src;
+  for (const [open, close] of [['$$', '$$'], ['\\[', '\\]'], ['\\(', '\\)'], ['$', '$']]) {
+    if (!src.startsWith(open)) continue;
+    let body = src.slice(open.length);
+    const at = body.lastIndexOf(close);
+    if (at >= 0) body = body.slice(0, at);
+    return body.trim();
+  }
+  return src;
 }
