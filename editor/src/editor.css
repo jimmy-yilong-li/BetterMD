@@ -1,0 +1,394 @@
+/* BetterMD 编辑区：纸墨。宋体配 Iowan Old Style，暖白纸色，墨色文字，朱砂点缀。 */
+
+:root {
+  color-scheme: light dark;
+  --accent: #B8452F;
+  --paper: #FBF8F2;
+  --text: #2A2621;
+  --text-2: #766E63;
+  --text-3: #A8A094;
+  --marker: #C9BFAF;
+  --sep: rgba(70, 45, 20, .11);
+  --field: rgba(70, 45, 20, .065);
+  --code-bg: #F2EDE3;
+  --fig-bg: #F7F3EB;
+  --sel: color-mix(in srgb, var(--accent) 16%, transparent);
+  --emboss: 0 1px 0 rgba(255, 255, 255, .75);
+  --grain-opacity: .05;
+  --c-kw: #9b3d6f; --c-str: #a1452a; --c-num: #86601d; --c-com: #a79f92; --c-type: #3f6b62; --c-fn: #4b5d8a;
+  --font-body: "Iowan Old Style", "Songti SC", "Noto Serif SC", Georgia, serif;
+  --font-head: "Iowan Old Style", "Songti SC", "Noto Serif SC", Georgia, serif;
+  --font-quote: "Iowan Old Style", "Kaiti SC", "STKaiti", serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #D86A50;
+    --paper: #1A1816;
+    --text: #ECE5D8;
+    --text-2: #AAA194;
+    --text-3: #70695F;
+    --marker: #5F584F;
+    --sep: rgba(255, 240, 220, .09);
+    --field: rgba(255, 240, 220, .07);
+    --code-bg: #25221F;
+    --fig-bg: #211E1B;
+    --sel: color-mix(in srgb, var(--accent) 26%, transparent);
+    --emboss: 0 -1px 0 rgba(0, 0, 0, .55);
+    --grain-opacity: .035;
+    --c-kw: #e48ab8; --c-str: #e8906f; --c-num: #d8b56a; --c-com: #7d756b; --c-type: #8cc5b8; --c-fn: #9fb1e6;
+  }
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--paper);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 纸的细微纹理 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: var(--grain-opacity);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .4  0 0 0 0 .3  0 0 0 0 .2  0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+#editor {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+}
+
+#editor .cm-editor {
+  height: 100%;
+  background: transparent;
+  color: var(--text);
+}
+#editor .cm-editor.cm-focused { outline: none; }
+
+#editor .cm-scroller {
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.9;
+  overflow-x: hidden;
+}
+
+#editor .cm-content {
+  --gutter: clamp(44px, 7vw, 80px);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(700px + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: 40px var(--gutter) 45vh;
+  caret-color: var(--accent);
+  letter-spacing: .012em;
+  text-align: left;
+  text-autospace: normal;
+  hanging-punctuation: allow-end;
+  font-kerning: normal;
+}
+#editor.enter .cm-content { animation: doc-in .26s cubic-bezier(.2, .7, .2, 1); }
+@keyframes doc-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+#editor .cm-line { padding: 0; text-wrap: pretty; }
+#editor .cm-cursor, #editor .cm-dropCursor { border-left: 2px solid var(--accent); }
+#editor .cm-selectionLayer .cm-selectionBackground,
+#editor .cm-focused .cm-selectionLayer .cm-selectionBackground { background: var(--sel); }
+#editor .cm-content ::selection { background: transparent; }
+#editor .cm-placeholder { color: var(--text-3); }
+
+/* ---- Markdown 符号 ---- */
+#editor .cm-md-mark, #editor .cm-md-mark * { color: var(--marker); }
+/* 藏起来的符号是一个空 span，CodeMirror 会在它两边各放一个 <img> 光标垫片。<img> 会带来换行机会，
+   让“**重点**，”后面的逗号跑到下一行行首。光标一碰到符号它就会露出来，用不上这两个垫片，直接藏掉。 */
+#editor .cm-line span[contenteditable="false"]:empty + img.cm-widgetBuffer,
+#editor .cm-line img.cm-widgetBuffer:has(+ span[contenteditable="false"]:empty) { display: none; }
+
+/* ---- 标题：# 挂在左边的空白里 ---- */
+#editor .cm-h {
+  position: relative;
+  font-family: var(--font-head);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: left;
+  text-wrap: balance;
+  text-shadow: var(--emboss);
+  --pad: 0px;
+  --lh: 32px;
+}
+#editor .cm-h1 { font-size: 30px; line-height: 1.32; padding: 4px 0 6px; --pad: 4px; --lh: 39.6px; }
+#editor .cm-h2 { font-size: 22px; line-height: 1.5; padding-top: 4px; --pad: 4px; --lh: 33px; }
+#editor .cm-h3 { font-size: 18.5px; line-height: 1.6; padding-top: 2px; --pad: 2px; --lh: 29.6px; }
+#editor .cm-h4, #editor .cm-h5, #editor .cm-h6 { font-size: 17px; line-height: 1.9; }
+#editor .cm-h6 { color: var(--text-2); }
+
+#editor .cm-hmark {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 64px;
+  margin-left: -64px;
+  padding-right: 12px;
+  text-align: right;
+  font: 500 11.5px/1 var(--font-mono);
+  letter-spacing: 0;
+  text-shadow: none;
+  white-space: pre;
+}
+#editor .cm-hmark, #editor .cm-hmark * { color: var(--marker); }
+#editor .cm-hmark.is-active, #editor .cm-hmark.is-active * { color: var(--text-3); }
+
+/* 小标题这一节可以折叠：悬停时左边出现箭头，折叠后显示“N 段” */
+#editor .cm-foldable::before {
+  content: "";
+  position: absolute;
+  left: calc(2px - var(--gutter));
+  top: var(--pad);
+  width: 16px;
+  height: var(--lh);
+  background: var(--text-3);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M4.5 2.5 8 6l-3.5 3.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 11px no-repeat;
+  transform: rotate(90deg);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity .15s ease, transform .22s cubic-bezier(.2, .7, .2, 1);
+}
+#editor .cm-foldable:hover::before { opacity: .9; }
+@media (max-width: 760px) { #editor .cm-foldable::before { display: none; } }
+#editor .cm-foldable.is-folded::before { opacity: .9; transform: none; }
+#editor .cm-fold-badge {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 8px;
+  border-radius: 8px;
+  background: var(--field);
+  color: var(--text-3);
+  font: 400 11px/1.6 var(--font-ui);
+  letter-spacing: 0;
+  text-shadow: none;
+  vertical-align: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* ---- 行内格式 ---- */
+#editor .cm-inline-code {
+  font-family: var(--font-mono);
+  font-size: .84em;
+  background: var(--code-bg);
+  border-radius: 5px;
+  padding: 1px 4px;
+  letter-spacing: 0;
+}
+#editor .cm-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
+}
+#editor .cm-link * { color: inherit; }
+#editor .cm-tag {
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 6px;
+  padding: 1px 5px;
+  font-size: .86em;
+  font-weight: 500;
+  white-space: nowrap;
+}
+#editor .cm-sub { vertical-align: sub; font-size: .78em; }
+#editor .cm-sup { vertical-align: super; font-size: .78em; }
+
+/* ---- 列表和待办：符号区宽度固定，折行的文字悬挂对齐 ---- */
+#editor .cm-li { padding-left: var(--hang); text-indent: calc(-1 * var(--hang)); }
+#editor .cm-li > * { text-indent: 0; }
+#editor .cm-list-mark { display: inline-block; text-indent: 0; text-align: right; white-space: nowrap; }
+#editor .cm-list-glyph { display: inline-block; padding-right: .45em; color: var(--text-3); }
+#editor .cm-list-bullet .cm-list-glyph { padding-right: .6em; }
+#editor .cm-list-number .cm-list-glyph { font-variant-numeric: tabular-nums; }
+#editor .cm-list-num { color: var(--text-3); font-variant-numeric: tabular-nums; }
+#editor .cm-task-box {
+  position: relative;
+  display: inline-block;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  margin-right: 9px;
+  vertical-align: -2px;
+  border: 1.5px solid var(--text-3);
+  border-radius: 5px;
+  box-shadow: inset 0 1px 1.5px rgba(0, 0, 0, .12);
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+#editor .cm-task-box svg {
+  position: absolute;
+  left: .5px;
+  top: .5px;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+#editor .cm-task-box path { stroke-dasharray: 11; stroke-dashoffset: 11; transition: stroke-dashoffset .22s ease .06s; }
+#editor .cm-task-box.is-done {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, #fff), var(--accent));
+  border-color: var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28), 0 1px 1.5px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+#editor .cm-task-box.is-done path { stroke-dashoffset: 0; }
+#editor .cm-task-box.just { animation: box-pop .3s ease-out; }
+@keyframes box-pop { 0% { transform: scale(1); } 45% { transform: scale(1.22); } 100% { transform: scale(1); } }
+#editor .cm-task-done, #editor .cm-task-done * {
+  color: var(--text-3);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--text-3) 70%, transparent);
+}
+
+/* ---- 引用：楷体，朱砂竖线 ---- */
+#editor .cm-quote {
+  font-family: var(--font-quote);
+  color: var(--text-2);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  padding-left: 16px;
+}
+
+/* ---- 分割线：居中的「· · ·」 ---- */
+#editor .cm-rule {
+  display: inline-block;
+  width: 100%;
+  text-align: center;
+  color: var(--accent);
+  opacity: .75;
+  letter-spacing: .6em;
+  text-indent: .6em;
+  font-size: 15px;
+  user-select: none;
+}
+
+/* ---- 代码块 ---- */
+#editor .cm-code {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.65;
+  letter-spacing: 0;
+  text-align: left;
+  background: var(--code-bg);
+  padding: 0 18px;
+}
+#editor .cm-code-first { border-radius: 10px 10px 0 0; padding-top: 8px; }
+#editor .cm-code-last { border-radius: 0 0 10px 10px; padding-bottom: 8px; }
+#editor .cm-code-first.cm-code-last { border-radius: 10px; }
+#editor .cm-code-fence { line-height: 1.2; font-size: 11px; }
+#editor .cm-code-lang { float: right; font: 11px/1.6 var(--font-ui); color: var(--text-3); letter-spacing: .02em; }
+#editor .cm-code-indented { border-radius: 0; }
+
+/* ---- 表格 ---- */
+#editor .cm-table { overflow-x: auto; padding: 4px 0 10px; cursor: text; }
+#editor .cm-table table { border-collapse: collapse; width: 100%; font-size: 15px; line-height: 1.6; text-align: left; }
+#editor .cm-table th, #editor .cm-table td { border-bottom: .5px solid var(--sep); padding: 8px 10px; vertical-align: middle; }
+#editor .cm-table th { font-size: 13px; font-weight: 600; color: var(--text-2); border-bottom: 1px solid var(--sep); }
+#editor .cm-table code { font-family: var(--font-mono); font-size: .84em; background: var(--code-bg); border-radius: 5px; padding: 1px 4px; }
+#editor .cm-table a { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 3px; }
+#editor .cm-table img { max-height: 120px; vertical-align: middle; border-radius: 6px; }
+#editor .cm-table-src { font-family: var(--font-mono); font-size: 13.5px; line-height: 1.75; letter-spacing: 0; text-align: left; }
+
+/* ---- 公式 ---- */
+#editor .katex { font-size: 1.08em; }
+#editor .cm-math-inline { cursor: text; }
+#editor .cm-math-block { text-align: center; padding: 6px 0 8px; overflow-x: auto; overflow-y: hidden; cursor: text; }
+#editor .cm-math-block .katex-display { margin: 0; }
+#editor .cm-math-src {
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.65;
+  letter-spacing: 0;
+  text-align: left;
+  background: var(--code-bg);
+  padding: 0 16px;
+}
+#editor .cm-math-first { border-radius: 10px 10px 0 0; padding-top: 8px; }
+#editor .cm-math-last { border-radius: 0 0 10px 10px; padding-bottom: 8px; }
+#editor .cm-math-first.cm-math-last { border-radius: 10px; }
+#editor .cm-math-preview {
+  text-align: center;
+  background: var(--code-bg);
+  border-top: .5px dashed var(--sep);
+  border-radius: 0 0 10px 10px;
+  padding: 4px 16px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+#editor .cm-math-preview .katex-display { margin: .4em 0; }
+#editor .cm-math-src-inline { font-family: var(--font-mono); font-size: .86em; color: var(--text-2); letter-spacing: 0; }
+#editor .cm-math-empty { font: 12.5px var(--font-ui); color: var(--text-3); }
+#editor .cm-tooltip { border: none; background: transparent; }
+#editor .cm-math-tip {
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: 0 0 0 .5px var(--sep), 0 10px 30px rgba(0, 0, 0, .14), 0 2px 6px rgba(0, 0, 0, .06);
+  color: var(--text);
+  animation: pop-in .16s ease-out;
+}
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px) scale(.985); } to { opacity: 1; transform: none; } }
+
+/* ---- 图片 ---- */
+#editor .cm-image { display: inline-block; max-width: 100%; vertical-align: bottom; cursor: default; }
+#editor .cm-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin: 0 auto;
+  border-radius: 10px;
+  background: var(--fig-bg);
+  box-shadow: 0 0 0 .5px var(--sep), 0 8px 24px rgba(60, 40, 20, .10);
+}
+#editor .cm-image.is-block { display: block; padding: 8px 0 6px; text-align: center; }
+#editor .cm-image.is-editing { padding-top: 4px; opacity: .92; }
+#editor .cm-image-caption { display: block; margin-top: 7px; font: 12.5px/1.5 var(--font-ui); color: var(--text-3); text-align: center; }
+#editor .cm-image-caption:empty { display: none; }
+#editor .cm-image.is-broken img { display: none; }
+#editor .cm-image.is-broken::before {
+  content: "找不到这张图片";
+  display: block;
+  padding: 18px;
+  border: 1.5px dashed var(--sep);
+  border-radius: 10px;
+  font: 13px var(--font-ui);
+  color: var(--text-3);
+  text-align: center;
+}
+
+/* ---- 拖文件进来时的提示框 ---- */
+#editor.is-dropping::after {
+  content: "松手，图片会存进「附件」，插在这里";
+  position: fixed;
+  inset: 14px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--accent);
+  font: 14px var(--font-ui);
+  pointer-events: none;
+  z-index: 10;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #editor *, #editor *::before, #editor::after { animation: none !important; transition: none !important; }
+  #editor.enter .cm-content { animation: none; }
+}

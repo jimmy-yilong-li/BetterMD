@@ -1,0 +1,332 @@
+// BetterMD 编辑器入口：在 WKWebView 里跑的 CodeMirror 6，Markdown 原地渲染，公式用 KaTeX。
+// App 通过 window.bettermd 放进笔记；编辑器把改动、粘贴的图片等通过 bridge.post 告诉 App。
+import 'katex/dist/katex.min.css';
+import './editor.css';
+import { EditorState, EditorSelection, Compartment, Annotation, Transaction } from '@codemirror/state';
+import { EditorView, keymap, drawSelection, dropCursor, placeholder } from '@codemirror/view';
+import { history, historyKeymap, defaultKeymap, indentWithTab } from '@codemirror/commands';
+import { markdown, markdownLanguage, markdownKeymap } from '@codemirror/lang-markdown';
+import {
+  syntaxHighlighting, HighlightStyle, codeFolding, foldKeymap, foldable, foldedRanges, foldEffect, unfoldEffect,
+} from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
+import { mathSyntax } from './math.js';
+import { codeLanguages } from './languages.js';
+import { livePreview, mathTooltip, focusState, focusTracker, dirState, setDir } from './livePreview.js';
+import { toggleWrap, insertLink, insertMath, setHeading, toggleTodo } from './commands.js';
+import { countParagraphs } from './helpers.js';
+import { post } from './bridge.js';
+
+// 文字的颜色和字形；字号、行距这些在 editor.css 里
+const inkStyle = HighlightStyle.define([
+  { tag: t.strong, fontWeight: '700' },
+  { tag: t.emphasis, fontStyle: 'italic' },
+  { tag: t.strikethrough, textDecoration: 'line-through', textDecorationColor: 'var(--text-3)' },
+  { tag: t.link, color: 'var(--accent)' },
+  { tag: t.url, color: 'var(--text-3)' },
+  { tag: t.monospace, fontFamily: 'var(--font-mono)' },
+  { tag: t.processingInstruction, color: 'var(--marker)' },
+  { tag: t.contentSeparator, color: 'var(--marker)' },
+  { tag: t.labelName, color: 'var(--text-3)' },
+  { tag: t.quote, color: 'var(--text-2)' },
+  // 代码块
+  { tag: [t.keyword, t.operatorKeyword, t.modifier, t.controlKeyword, t.definitionKeyword], color: 'var(--c-kw)' },
+  { tag: [t.string, t.special(t.string), t.regexp, t.character], color: 'var(--c-str)' },
+  { tag: [t.number, t.bool, t.null, t.atom], color: 'var(--c-num)' },
+  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: 'var(--c-com)', fontStyle: 'italic' },
+  { tag: [t.typeName, t.className, t.namespace, t.tagName], color: 'var(--c-type)' },
+  { tag: [t.function(t.variableName), t.function(t.propertyName), t.macroName], color: 'var(--c-fn)' },
+  { tag: [t.attributeName, t.propertyName], color: 'var(--c-fn)' },
+  { tag: t.meta, color: 'var(--text-3)' },
+  { tag: t.invalid, color: 'var(--accent)' },
+]);
+
+const formatKeys = [
+  { key: 'Mod-b', run: toggleWrap('**') },
+  { key: 'Mod-i', run: toggleWrap('*') },
+  { key: 'Mod-Shift-x', run: toggleWrap('~~') },
+  { key: 'Mod-e', run: toggleWrap('`') },
+  { key: 'Mod-k', run: insertLink },
+  { key: 'Mod-Shift-e', run: insertMath },
+  { key: 'Mod-Shift-t', run: toggleTodo },
+  { key: 'Mod-1', run: setHeading(1) },
+  { key: 'Mod-2', run: setHeading(2) },
+  { key: 'Mod-3', run: setHeading(3) },
+  { key: 'Mod-0', run: setHeading(0) },
+];
+
+// 折叠起来的一节显示成“N 段”
+const folding = codeFolding({
+  preparePlaceholder: (state, range) => countParagraphs(state.sliceDoc(range.from, range.to)),
+  placeholderDOM(view, onclick, count) {
+    const badge = document.createElement('span');
+    badge.className = 'cm-fold-badge';
+    badge.textContent = `${count} 段`;
+    badge.title = '展开';
+    badge.addEventListener('mousedown', e => { e.preventDefault(); onclick(e); });
+    return badge;
+  },
+});
+
+/** 从 App 来的改动，不用再告诉 App。 */
+const fromApp = Annotation.define();
+const readOnly = new Compartment();
+const readOnlyConfig = on => [EditorState.readOnly.of(on), EditorView.editable.of(!on)];
+
+const extensions = [
+  history(),
+  drawSelection(),
+  dropCursor(),
+  EditorView.lineWrapping,
+  markdown({ base: markdownLanguage, codeLanguages, extensions: [mathSyntax], addKeymap: false }),
+  syntaxHighlighting(inkStyle),
+  focusState, focusTracker, dirState, livePreview, mathTooltip, folding,
+  placeholder('开始写…'),
+  keymap.of([...formatKeys, ...markdownKeymap, ...foldKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+  EditorView.updateListener.of(onUpdate),
+  EditorView.domEventHandlers({ mousedown: onMouseDown, paste: onPaste, drop: onDrop, compositionend: onCompositionEnd }),
+];
+
+function makeState(text, dir, ro) {
+  return EditorState.create({
+    doc: text,
+    extensions: [extensions, readOnly.of(readOnlyConfig(ro)), dirState.init(() => dir)],
+  });
+}
+
+const host = document.getElementById('editor');
+const view = new EditorView({ state: makeState('', '', true), parent: host });
+let current = { id: null, dir: '', readOnly: true };
+/** 每篇笔记离开时的光标和滚动位置；回来时正文没变就恢复。 */
+const memory = new Map();
+
+// ---- 编辑器 → App ----
+
+let changedWhileComposing = false;
+
+function onUpdate(update) {
+  if (!update.docChanged || !current.id) return;
+  if (update.transactions.every(tr => !tr.docChanged || tr.annotation(fromApp))) return;
+  // 中文输入法还在拼的时候先不发，选完字再发，免得把拼音存进文件
+  if (update.view.composing) { changedWhileComposing = true; return; }
+  sendText();
+}
+
+function onCompositionEnd() {
+  setTimeout(() => {
+    if (changedWhileComposing && !view.composing) {
+      changedWhileComposing = false;
+      sendText();
+    }
+  });
+}
+
+function sendText() {
+  post({ type: 'change', id: current.id, text: view.state.doc.toString() });
+}
+
+// ---- App → 编辑器 ----
+
+/** 打开一篇笔记，或者把这篇笔记换成 App 那边的最新内容。options：dir、readOnly、selectTitle。 */
+function setDocument(id, text, options = {}) {
+  const dir = options.dir ?? '';
+  const ro = !!options.readOnly;
+  if (id === current.id) {
+    const effects = [];
+    if (dir !== current.dir) effects.push(setDir.of(dir));
+    if (ro !== current.readOnly) effects.push(readOnly.reconfigure(readOnlyConfig(ro)));
+    const old = view.state.doc.toString();
+    const changes = old === text ? [] : [minimalChange(old, text)];
+    if (changes.length || effects.length) {
+      view.dispatch({ changes, effects, annotations: [fromApp.of(true), Transaction.addToHistory.of(false)] });
+    }
+    current = { id, dir, readOnly: ro };
+    return;
+  }
+  if (current.id) {
+    memory.set(current.id, {
+      text: view.state.doc.toString(), selection: view.state.selection.toJSON(), scroll: view.scrollSnapshot(),
+    });
+  }
+  changedWhileComposing = false;
+  current = { id, dir, readOnly: ro };
+  view.setState(makeState(text, dir, ro));
+  const saved = memory.get(id);
+  if (saved && saved.text === text) {
+    view.dispatch({ selection: EditorSelection.fromJSON(saved.selection), effects: saved.scroll });
+  } else if (options.selectTitle) {
+    const first = view.state.doc.line(1);
+    const start = first.from + (/^#{1,6}\s+/.exec(first.text)?.[0].length ?? 0);
+    view.dispatch({ selection: { anchor: start, head: first.to } });
+    view.focus();
+  }
+  host.classList.remove('enter');
+  void host.offsetWidth;
+  host.classList.add('enter');
+}
+
+/** 只替换真正变了的那一段，光标和滚动位置不乱跳。 */
+function minimalChange(a, b) {
+  let start = 0;
+  const max = Math.min(a.length, b.length);
+  while (start < max && a.charCodeAt(start) === b.charCodeAt(start)) start++;
+  let endA = a.length, endB = b.length;
+  while (endA > start && endB > start && a.charCodeAt(endA - 1) === b.charCodeAt(endB - 1)) { endA--; endB--; }
+  return { from: start, to: endA, insert: b.slice(start, endB) };
+}
+
+/** 没有选中笔记时：清空，只读。 */
+function clear() {
+  if (current.id) {
+    memory.set(current.id, {
+      text: view.state.doc.toString(), selection: view.state.selection.toJSON(), scroll: view.scrollSnapshot(),
+    });
+  }
+  current = { id: null, dir: '', readOnly: true };
+  view.setState(makeState('', '', true));
+}
+
+// ---- 鼠标：⌘ 点链接或标签、点小标题左边的箭头折叠 ----
+
+function onMouseDown(event, v) {
+  if (event.button !== 0) return false;
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return false;
+  const link = target.closest('[data-url], [data-path]');
+  if (link && (event.metaKey || v.state.readOnly)) {
+    event.preventDefault();
+    post({ type: 'open', url: link.dataset.url ?? null, path: link.dataset.path ?? null });
+    return true;
+  }
+  const tag = target.closest('.cm-tag');
+  if (tag && event.metaKey) {
+    event.preventDefault();
+    post({ type: 'tag', name: tag.dataset.tag });
+    return true;
+  }
+  const heading = target.closest('.cm-foldable');
+  if (heading && !target.closest('.cm-hmark') && event.clientX < heading.getBoundingClientRect().left) {
+    event.preventDefault();
+    toggleSection(v, v.posAtDOM(heading));
+    return true;
+  }
+  return false;
+}
+
+function toggleSection(v, pos) {
+  const line = v.state.doc.lineAt(pos);
+  let open = null;
+  foldedRanges(v.state).between(line.to, line.to + 1, (from, to) => { if (from === line.to) open = { from, to }; });
+  if (open) {
+    v.dispatch({ effects: unfoldEffect.of(open) });
+  } else {
+    const range = foldable(v.state, line.from, line.to);
+    if (range) v.dispatch({ effects: foldEffect.of(range) });
+  }
+}
+
+// ---- 粘贴、拖进来的图片和文件：交给 App 存进「附件」，再插入链接 ----
+
+function onPaste(event, v) {
+  const data = event.clipboardData;
+  const files = [...(data?.files ?? [])];
+  if (!files.length || v.state.readOnly) return false;
+  // 从 Word、Pages 复制文字时，剪贴板里还会附带一张文字的截图：有正经文字就贴文字（单独一个网址除外）
+  const text = data.getData('text/plain').trim();
+  if (text && !/^\S+:\/\/\S+$/.test(text)) return false;
+  event.preventDefault();
+  insertFiles(v, files, v.state.selection.main);
+  return true;
+}
+
+function onDrop(event, v) {
+  host.classList.remove('is-dropping');
+  dragDepth = 0;
+  const files = [...(event.dataTransfer?.files ?? [])];
+  if (!files.length || v.state.readOnly) return false;
+  event.preventDefault();
+  let pos = v.posAtCoords({ x: event.clientX, y: event.clientY }) ?? v.state.selection.main.head;
+  // 拖放的位置不精确：落在一行文字中间时，放到这一行后面，不把句子拆开
+  const line = v.state.doc.lineAt(pos);
+  if (pos > line.from && pos < line.to) pos = line.to;
+  insertFiles(v, files, EditorSelection.cursor(pos));
+  return true;
+}
+
+// 拖文件进来：整个编辑区（包括正文两边的空白）都能放下，并显示虚线提示框。
+// CodeMirror 只在正文上监听拖放，也不会主动接受文件，所以在整个页面上处理。
+let dragDepth = 0;
+const draggingFiles = event => !view.state.readOnly && !!event.dataTransfer?.types.includes('Files');
+document.addEventListener('dragenter', event => {
+  if (!draggingFiles(event)) return;
+  dragDepth++;
+  host.classList.add('is-dropping');
+});
+document.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) host.classList.remove('is-dropping');
+});
+document.addEventListener('dragover', event => {
+  if (!draggingFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+});
+document.addEventListener('drop', event => {
+  if (view.contentDOM.contains(event.target)) return; // 正文里的由 onDrop 处理
+  event.preventDefault();
+  onDrop(event, view);
+});
+
+async function insertFiles(v, files, range) {
+  const id = current.id;
+  const items = [];
+  for (const file of files) {
+    const data = await readBase64(file);
+    const reply = await post({ type: 'attach', id, name: file.name, mime: file.type, data });
+    if (reply?.link) items.push({ link: reply.link, name: file.name, image: file.type.startsWith('image/') });
+  }
+  if (current.id !== id || !items.length) return;
+  insertAttachments(items, range);
+}
+
+function readBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 在 range 处插入附件链接：图片各占一行，别的文件写成普通链接。 */
+function insertAttachments(items, range = view.state.selection.main) {
+  if (view.state.readOnly) return;
+  const doc = view.state.doc;
+  const from = Math.min(range.from, doc.length), to = Math.min(range.to, doc.length);
+  const text = items.map(item => {
+    const label = item.image ? '' : item.name.replace(/[[\]]/g, '');
+    return (item.image ? '!' : '') + `[${label}](${item.link})`;
+  }).join(items.every(i => i.image) ? '\n' : ' ');
+  const line = doc.lineAt(from);
+  const block = items.some(i => i.image);
+  const before = block && doc.sliceString(line.from, from).trim() !== '' ? '\n' : '';
+  const after = block && doc.sliceString(to, doc.lineAt(to).to).trim() !== '' ? '\n' : '';
+  const insert = before + text + after;
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from + insert.length },
+    userEvent: 'input.paste',
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+window.bettermd = {
+  setDocument,
+  clear,
+  insertAttachments: items => insertAttachments(items),
+  focus: () => view.focus(),
+  view,
+};
+
+post({ type: 'ready' });
