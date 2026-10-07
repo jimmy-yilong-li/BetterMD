@@ -35,8 +35,9 @@ Bear 式的 Markdown 笔记 App，只做 macOS，笔记同步到我们自己的�
 
 ## 开发命令
 
-- 跑测试：`swift test`
-- 打包成 App：`scripts/bundle.sh`（产物在 `build/BetterMD.app`，`build/` 不进 git）
+- 跑测试：`swift test`；编辑器（`editor/`）的测试：`npm --prefix editor test`
+- 打包成 App：`scripts/bundle.sh`（先打包编辑器网页，再编译 Swift；产物在 `build/BetterMD.app`，`build/` 不进 git）
 - 用测试笔记库启动（不碰真正的「我的笔记」）：`open -n build/BetterMD.app --args -libraryPath "$PWD/.build/dev-library"`
-- 不开屏幕录制权限也能看界面：再加 `-snapshotPath /某处/图.png`，两秒后存下窗口图片和一份 `.txt`（每个列表的行数、AppModel 里的数据），然后自动退出。注意：SwiftUI 列表的内容画不进图片，列表要看 `.txt`。
+- 不开屏幕录制权限也能看界面：再加 `-snapshotPath /某处/图.png`，两秒多以后存下窗口图片、编辑器图片（`图-editor.png`）和一份 `.txt`（每个列表的行数、AppModel 里的数据、编辑器里渲染出了什么），然后自动退出。可选 `-snapshotNote 标题里的字` 先选中某篇，`-snapshotAppearance dark` 用深色。注意：SwiftUI 列表的内容画不进图片，列表要看 `.txt`。
+- 只看编辑器：`node scripts/editor-shot.mjs 笔记.md 图.png [--dark] [--cursor 文字] [--size 宽x高]`（无头 Chrome；先 `npm --prefix editor run build`）
 - 实现计划在 `docs/superpowers/plans/`
