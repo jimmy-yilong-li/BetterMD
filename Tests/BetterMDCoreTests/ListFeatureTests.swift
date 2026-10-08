@@ -84,3 +84,46 @@ struct ListFilterModelTests {
         #expect(model.searchAll == false)
     }
 }
+
+@MainActor
+struct VisibleCacheTests {
+    @Test func cachedListFollowsEveryInput() throws {
+        let root = try TempDir.make()
+        try root.write("# 甲\n#会议", to: "工作/a.md")
+        try root.write("# 乙", to: "工作/b.md")
+        try root.write("# 丙", to: "c.md")
+        let model = AppModel(root: root)
+        model.saveDelay = .seconds(60)
+        model.load()
+        #expect(model.visibleNotes.count == 3)
+        // 改正文：被改的那篇排到最前
+        let b = try #require(model.notes.first { $0.title == "乙" })
+        model.updateText("# 乙\n新内容", for: b.id)
+        #expect(model.visibleNotes.first?.id == b.id)
+        // 换范围、搜索、筛选、搜全部，每次都要重新算
+        model.scope = .folder("工作")
+        #expect(model.visibleNotes.count == 2)
+        model.tagFilter = "会议"
+        #expect(model.visibleNotes.map(\.title) == ["甲"])
+        model.query = "丙"
+        #expect(model.visibleNotes.isEmpty)
+        model.searchAll = true
+        #expect(model.visibleNotes.map(\.title) == ["丙"])
+        // 标签树也跟着正文变
+        model.updateText("# 乙\n#新标签", for: b.id)
+        #expect(model.tagTree.map(\.path).contains("新标签"))
+    }
+
+    @Test func searchSortsTitleHitsFirstQuickly() {
+        let notes = (0..<3000).map { i in
+            Note(path: "n\(i).md", text: i % 10 == 0 ? "# 卷积 \(i)\n正文" : "# 题\(i)\n正文提到卷积",
+                 created: .now, modified: Date(timeIntervalSince1970: Double(i)))
+        }
+        let clock = ContinuousClock()
+        var hits: [Note] = []
+        let time = clock.measure { hits = LibraryIndex.search(notes, query: "卷积") }
+        #expect(hits.count == 3000)
+        #expect(hits.prefix(300).allSatisfy { $0.title.hasPrefix("卷积") })
+        #expect(time < .milliseconds(150), "用了 \(time)")
+    }
+}

@@ -19,10 +19,18 @@ public struct Note: Identifiable, Hashable, Sendable {
         id: UUID = UUID(), path: String, text: String, created: Date, modified: Date,
         isPinned: Bool = false, originalFolder: String? = nil
     ) {
+        self.init(id: id, path: path, text: text, parsed: ParsedNote(text: text), created: created,
+                  modified: modified, isPinned: isPinned, originalFolder: originalFolder)
+    }
+
+    /// 正文已经解析过时用这个，免得重复解析（几千篇笔记时，解析是读取笔记库的主要开销）。
+    /// `parsed` 必须是这段 `text` 的解析结果。
+    init(id: UUID, path: String, text: String, parsed: ParsedNote, created: Date, modified: Date,
+         isPinned: Bool, originalFolder: String?) {
         self.id = id
         self.path = path
         self.text = text
-        self.parsed = ParsedNote(text: text)
+        self.parsed = parsed
         self.created = created
         self.modified = modified
         self.isPinned = isPinned
@@ -44,7 +52,7 @@ public struct Note: Identifiable, Hashable, Sendable {
 
     /// 同一篇笔记换一个 id（重新扫描目录时沿用旧 id）。
     public func withID(_ id: UUID) -> Note {
-        Note(id: id, path: path, text: text, created: created, modified: modified,
+        Note(id: id, path: path, text: text, parsed: parsed, created: created, modified: modified,
              isPinned: isPinned, originalFolder: originalFolder)
     }
 

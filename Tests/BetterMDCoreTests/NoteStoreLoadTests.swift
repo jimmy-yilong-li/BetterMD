@@ -93,4 +93,33 @@ struct NoteStoreLoadTests {
         #expect(note.text == "# 标题\n第一行\n第二行\n老 Mac 的换行")
         #expect(note.title == "标题")
     }
+
+    @Test func reloadReusesUnchangedNotesAndRereadsChangedOnes() throws {
+        let root = try TempDir.make()
+        for i in 0..<1500 {
+            try root.write("# 笔记 \(i)\n#标签\(i % 7)\n\n" + String(repeating: "正文内容 text $x_\(i)$ **粗体**\n\n", count: 40),
+                           to: "文件夹\(i % 20)/笔记 \(i).md")
+        }
+        let store = NoteStore(root: root)
+        let clock = ContinuousClock()
+        var first = NoteStore.Snapshot(notes: [], folders: [], state: LibraryState())
+        let firstTime = try clock.measure { first = try store.load() }
+        #expect(first.notes.count == 1500)
+
+        // 外面改了一篇，别的都没动
+        let changedPath = "文件夹3/笔记 3.md"
+        try root.write("# 改过的标题\n新正文", to: changedPath)
+        let previous = Dictionary(first.notes.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        var second = NoteStore.Snapshot(notes: [], folders: [], state: LibraryState())
+        let secondTime = try clock.measure { second = try store.load(reusing: previous) }
+
+        let changed = try #require(second.notes.first { $0.path == changedPath })
+        #expect(changed.title == "改过的标题")
+        #expect(changed.id == previous[changedPath]?.id)
+        let unchanged = try #require(second.notes.first { $0.path == "文件夹1/笔记 1.md" })
+        #expect(unchanged.id == previous["文件夹1/笔记 1.md"]?.id)
+        #expect(unchanged.parsed == previous["文件夹1/笔记 1.md"]?.parsed)
+        // 沿用解析结果的重新读取，应该远快于第一次读取
+        #expect(secondTime < firstTime / 3, "第一次 \(firstTime)，重新读取 \(secondTime)")
+    }
 }

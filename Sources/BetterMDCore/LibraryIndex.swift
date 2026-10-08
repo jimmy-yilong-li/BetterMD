@@ -64,16 +64,15 @@ public enum LibraryIndex {
     public static func search(_ notes: [Note], query: String) -> [Note] {
         let terms = SearchText.terms(query)
         guard !terms.isEmpty else { return sorted(notes) }
-        func titleHit(_ note: Note) -> Bool {
-            let title = SearchText.fold(note.title)
-            return terms.contains { title.contains($0) }
-        }
+        // 每篇的“标题有没有命中”只算一次，不要在排序比较时反复算
         return notes
             .filter { SearchText.matches($0.parsed.searchKey, terms: terms) }
-            .sorted { a, b in
-                let (ha, hb) = (titleHit(a), titleHit(b))
-                return ha != hb ? ha : a.modified > b.modified
+            .map { note -> (note: Note, titleHit: Bool) in
+                let title = SearchText.fold(note.title)
+                return (note, terms.contains { title.contains($0) })
             }
+            .sorted { a, b in a.titleHit != b.titleHit ? a.titleHit : a.note.modified > b.note.modified }
+            .map(\.note)
     }
 
     /// 列表里实际显示的笔记。

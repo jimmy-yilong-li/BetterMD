@@ -22,13 +22,5 @@ struct SearchTextTests {
         #expect(SearchText.terms("  \n ").isEmpty)
     }
 
-    @Test func snippetShowsTextAroundFirstHit() {
-        let text = String(repeating: "前", count: 30) + "同步方案" + String(repeating: "后", count: 30)
-        let snippet = SearchText.snippet(of: text, terms: SearchText.terms("同步"), before: 5, length: 12)
-        #expect(snippet == "…前前前前前同步方案后后后")
-    }
 
-    @Test func snippetIsNilWithoutHit() {
-        #expect(SearchText.snippet(of: "abc", terms: ["zzz"]) == nil)
-    }
 }

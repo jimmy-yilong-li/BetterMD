@@ -6,7 +6,11 @@ import Observation
 @Observable
 public final class AppModel {
     public private(set) var store: NoteStore
-    public private(set) var notes: [Note] = []
+    public private(set) var notes: [Note] = [] {
+        didSet { notesVersion &+= 1 }
+    }
+    /// notes 每改一次加一。列表、标签树按它判断缓存还能不能用；它本身是被观察的，界面读缓存时也会跟着它刷新。
+    private var notesVersion = 0
     public private(set) var folders: [String] = []
     public private(set) var state = LibraryState()
     public var scope: Scope = .all {
@@ -47,18 +51,39 @@ public final class AppModel {
         store = NoteStore(root: root)
     }
 
+    /// 列表里显示的笔记。一次界面刷新会读好几次，按输入缓存：笔记、范围、搜索词、筛选任何一样变了才重算。
     public var visibleNotes: [Note] {
         var tag: String?
         if case .folder = scope { tag = tagFilter }
-        return LibraryIndex.visible(notes, scope: scope, query: query, tag: tag, searchAll: searchAll)
+        let key = VisibleKey(notes: notesVersion, scope: scope, query: query, tag: tag, searchAll: searchAll)
+        if let cached = visibleCache, cached.key == key { return cached.notes }
+        let result = LibraryIndex.visible(notes, scope: scope, query: query, tag: tag, searchAll: searchAll)
+        visibleCache = (key, result)
+        return result
     }
+
+    private struct VisibleKey: Equatable {
+        var notes: Int
+        var scope: Scope
+        var query: String
+        var tag: String?
+        var searchAll: Bool
+    }
+
+    @ObservationIgnored private var visibleCache: (key: VisibleKey, notes: [Note])?
+    @ObservationIgnored private var tagTreeCache: (version: Int, tree: [TagNode])?
     /// 文件夹里那一排标签筛选；不在文件夹视图里时是空的。
     public var chipTags: [String] {
         if case .folder = scope { return LibraryIndex.chipTags(notes, in: scope) }
         return []
     }
     public var folderTree: [FolderNode] { LibraryIndex.folderTree(folders) }
-    public var tagTree: [TagNode] { LibraryIndex.tagTree(notes) }
+    public var tagTree: [TagNode] {
+        if let cached = tagTreeCache, cached.version == notesVersion { return cached.tree }
+        let tree = LibraryIndex.tagTree(notes)
+        tagTreeCache = (notesVersion, tree)
+        return tree
+    }
     public var selectedNote: Note? { selectedID.flatMap { id in notes.first { $0.id == id } } }
 
     // MARK: - 读取
@@ -67,14 +92,14 @@ public final class AppModel {
     public func load() {
         do {
             try store.prepare()
-            var snapshot = try store.load()
+            let previous = Dictionary(notes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+            var snapshot = try store.load(reusing: previous)
             if snapshot.notes.isEmpty && !snapshot.state.welcomed {
                 snapshot.notes.append(try store.createNote(text: Self.welcomeText, inFolder: ""))
                 snapshot.state.welcomed = true
                 try store.saveState(snapshot.state)
             }
-            let oldIDs = Dictionary(notes.map { ($0.path, $0.id) }, uniquingKeysWith: { first, _ in first })
-            notes = snapshot.notes.map { note in oldIDs[note.path].map { note.withID($0) } ?? note }
+            notes = snapshot.notes
             folders = snapshot.folders
             state = snapshot.state
             keepSelectionVisible()

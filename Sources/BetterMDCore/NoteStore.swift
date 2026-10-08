@@ -29,7 +29,11 @@ public struct NoteStore: Sendable {
 
     /// 扫描全部 .md 笔记（包括废纸篓里的）和全部文件夹（不含「附件」「废纸篓」和隐藏目录）。
     /// 读不出来的文件（既不是 UTF-8 也不是 GB18030）直接跳过，不会被改动。
-    public func load() throws -> Snapshot {
+    ///
+    /// `previous`：上一次读到的笔记（按路径）。同一路径的笔记沿用原来的 id；文件修改时间也没变的，
+    /// 连正文和解析结果一起沿用，不再读文件、不再解析——回到 App 时重新读取就几乎不花时间。
+    /// 需要解析的笔记分到多个核上并行解析。
+    public func load(reusing previous: [String: Note] = [:]) throws -> Snapshot {
         let state = loadState()
         let keys: [URLResourceKey] = [.isDirectoryKey, .creationDateKey, .contentModificationDateKey]
         guard let walker = FileManager.default.enumerator(
@@ -40,6 +44,7 @@ public struct NoteStore: Sendable {
         }
         var notes: [Note] = []
         var folders: [String] = []
+        var fresh: [(path: String, text: String, created: Date, modified: Date)] = []
         for case let url as URL in walker {
             guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
             let path = relativePath(of: url)
@@ -54,14 +59,30 @@ public struct NoteStore: Sendable {
                 }
                 continue
             }
-            guard url.pathExtension.lowercased() == "md", let text = readText(url) else { continue }
-            notes.append(Note(
-                path: path, text: text,
-                created: values.creationDate ?? values.contentModificationDate ?? .now,
-                modified: values.contentModificationDate ?? .now,
-                isPinned: state.pinned.contains(path),
-                originalFolder: state.trashOrigins[path]
-            ))
+            guard url.pathExtension.lowercased() == "md" else { continue }
+            let modified = values.contentModificationDate ?? .now
+            let created = values.creationDate ?? modified
+            if let old = previous[path], old.modified == modified {
+                notes.append(Note(id: old.id, path: path, text: old.text, parsed: old.parsed, created: created,
+                                  modified: modified, isPinned: state.pinned.contains(path),
+                                  originalFolder: state.trashOrigins[path]))
+                continue
+            }
+            guard let text = readText(url) else { continue }
+            fresh.append((path, text, created, modified))
+        }
+        // 新读到的正文并行解析
+        var parsed = [ParsedNote?](repeating: nil, count: fresh.count)
+        parsed.withUnsafeMutableBufferPointer { buffer in
+            nonisolated(unsafe) let out = buffer
+            let texts = fresh.map(\.text)
+            DispatchQueue.concurrentPerform(iterations: texts.count) { i in out[i] = ParsedNote(text: texts[i]) }
+        }
+        for (entry, result) in zip(fresh, parsed) {
+            guard let result else { continue }
+            notes.append(Note(id: previous[entry.path]?.id ?? UUID(), path: entry.path, text: entry.text, parsed: result,
+                              created: entry.created, modified: entry.modified,
+                              isPinned: state.pinned.contains(entry.path), originalFolder: state.trashOrigins[entry.path]))
         }
         folders.sort { $0.localizedStandardCompare($1) == .orderedAscending }
         return Snapshot(notes: notes, folders: folders, state: state)

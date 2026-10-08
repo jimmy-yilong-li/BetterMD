@@ -64,6 +64,36 @@ public enum NoteText {
         return nil
     }
 
+    /// 搜索结果里的摘要：正文（不含标题行）里第一个命中处附近的一段，去掉 Markdown 符号；只有标题命中时返回 nil。
+    /// 只清理命中的那几行，长笔记也很快。
+    public static func searchSnippet(of text: String, terms: [String], before: Int = 12, length: Int = 80) -> String? {
+        guard !terms.isEmpty else { return nil }
+        let options: String.CompareOptions = [.caseInsensitive, .widthInsensitive, .diacriticInsensitive]
+        let bodyStart = text.firstIndex(of: "\n").map { text.index(after: $0) } ?? text.endIndex
+        let body = text[bodyStart...]
+        // 搜索词已经统一过大小写、全角半角，多数情况（尤其是中文）逐字就能找到，比不分大小写的查找快得多；
+        // 逐字找不到的词，再用不分大小写的查找
+        let hit = terms.compactMap { term in body.firstRange(of: term) ?? body.range(of: term, options: options) }
+            .min { $0.lowerBound < $1.lowerBound }
+        guard let hit else { return nil }
+        // 命中所在的那一行和后面两行
+        let lineStart = body[..<hit.lowerBound].lastIndex(of: "\n").map { body.index(after: $0) } ?? body.startIndex
+        var lines: [String] = []
+        var cursor = lineStart
+        while cursor < body.endIndex && lines.count < 3 {
+            let end = body[cursor...].firstIndex(of: "\n") ?? body.endIndex
+            let line = plain(body[cursor..<end].trimmingCharacters(in: .whitespaces))
+            if !line.isEmpty { lines.append(line) }
+            cursor = end < body.endIndex ? body.index(after: end) : end
+        }
+        let cleaned = lines.joined(separator: " ")
+        let again = terms.compactMap { cleaned.range(of: $0, options: options) }.min { $0.lowerBound < $1.lowerBound }
+        let start = again.flatMap { cleaned.index($0.lowerBound, offsetBy: -before, limitedBy: cleaned.startIndex) } ?? cleaned.startIndex
+        let end = cleaned.index(start, offsetBy: length, limitedBy: cleaned.endIndex) ?? cleaned.endIndex
+        let piece = String(cleaned[start..<end])
+        return (start > cleaned.startIndex || lineStart > body.startIndex ? "…" : "") + piece
+    }
+
     /// 列表里显示的摘要：跳过标题行和只有标签的行，去掉 Markdown 符号，最多 `limit` 个字符。
     public static func preview(of text: String, limit: Int = 120) -> String {
         var parts: [String] = []

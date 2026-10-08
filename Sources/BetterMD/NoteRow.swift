@@ -91,9 +91,6 @@ struct NoteRow: View {
 
     /// 搜索时摘要显示正文里命中的那一段（标题单独显示，不算；Markdown 符号去掉）；只有标题命中就显示普通摘要。
     private var summary: String {
-        if !terms.isEmpty, let snippet = SearchText.snippet(of: NoteText.preview(of: note.text, limit: .max), terms: terms) {
-            return snippet
-        }
-        return note.parsed.preview
+        NoteText.searchSnippet(of: note.text, terms: terms) ?? note.parsed.preview
     }
 }

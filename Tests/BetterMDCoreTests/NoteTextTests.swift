@@ -57,4 +57,23 @@ struct NoteTextTests {
         #expect(NoteText.preview(of: "# T\n\n花了 $5 和 $6，转义的 \\$7") == "花了 $5 和 $6，转义的 $7")
         #expect(NoteText.preview(of: "# T\n\n---\n文字") == "文字")
     }
+
+    @Test func searchSnippetLooksOnlyAtTheBody() {
+        // 只有标题命中：交给普通摘要
+        #expect(NoteText.searchSnippet(of: "# 周会\n\n别的内容", terms: ["周会"]) == nil)
+        // 正文命中：去掉 Markdown 符号，前面有内容时加省略号
+        let text = "# 题\n\n第一段\n\n这是 **周会** 的记录，$x$ 公式"
+        #expect(NoteText.searchSnippet(of: text, terms: ["周会"]) == "…这是 周会 的记录，x 公式")
+        // 多个词取最早命中的；不分大小写
+        #expect(NoteText.searchSnippet(of: "# T\nAlpha beta\ngamma", terms: ["GAMMA", "beta"])?.contains("beta") == true)
+    }
+
+    @Test func searchSnippetIsFastOnLongNotes() {
+        let long = "# 长笔记\n" + String(repeating: "很长的一行 **粗体** 和 $x^2$ 公式。\n", count: 20_000) + "结尾的关键词"
+        let clock = ContinuousClock()
+        var snippet: String?
+        let time = clock.measure { snippet = NoteText.searchSnippet(of: long, terms: ["关键词"]) }
+        #expect(snippet?.contains("关键词") == true)
+        #expect(time < .milliseconds(150), "用了 \(time)")
+    }
 }
