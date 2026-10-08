@@ -12,7 +12,8 @@ struct BetterMDApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("BetterMD") {
+        // 只有一个窗口：菜单命令（专注、搜索、快捷键表）都是发给“这个窗口”的，开出第二个窗口会同时作用到两个
+        Window("BetterMD", id: "main") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 960, minHeight: 600)
@@ -47,6 +48,8 @@ struct BetterMDApp: App {
                     .keyboardShortcut("/")
             }
             CommandGroup(replacing: .saveItem) {
+                Button("关闭窗口") { NSApp.keyWindow?.performClose(nil) }
+                    .keyboardShortcut("w")
                 Button("立即保存") { model.flushPendingSave() }
                     .keyboardShortcut("s")
             }

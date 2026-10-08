@@ -157,6 +157,7 @@ struct SidebarTree: View {
         default: return
         }
         var parts = path.split(separator: "/").map(String.init)
+        guard !parts.isEmpty else { return }
         parts.removeLast()
         var current: [String] = []
         for part in parts {

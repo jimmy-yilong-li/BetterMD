@@ -10,7 +10,6 @@ extension Notification.Name {
 struct NoteListView: View {
     @Environment(AppModel.self) private var model
     @Environment(WindowState.self) private var window
-    @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
 
     var body: some View {
@@ -42,7 +41,7 @@ struct NoteListView: View {
                     .animation(Motion.list, value: notes.map(\.id))
                 }
                 .scrollContentBackground(.hidden)
-                .focusable()
+                .focusable(!window.focusMode)
                 .focusEffectDisabled()
                 .focused($listFocused)
                 .onKeyPress(.upArrow) { step(-1, in: notes) }
@@ -62,7 +61,7 @@ struct NoteListView: View {
             // 专注模式里列表收起来了，它的搜索框和新建按钮也一起藏起来
             if !window.focusMode {
                 ToolbarItem {
-                    SearchField(text: Bindable(model).query, focused: $searchFocused)
+                    SearchField(text: Bindable(model).query, focusRequest: window.searchFocusRequest)
                         .frame(width: 236)
                 }
                 .sharedBackgroundVisibility(.hidden) // 用自己凹进纸面的样子，不要工具栏的玻璃底
@@ -71,10 +70,6 @@ struct NoteListView: View {
                         .help("新建笔记（⌘N）")
                 }
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .focusSearch)) { note in
-            if note.object as? Bool == true { model.searchAll = true }
-            searchFocused = true
         }
     }
 
@@ -220,20 +215,13 @@ private struct EmptyList: View {
 /// 凹进纸面的搜索框，带清除按钮；Esc 清空并退出。
 struct SearchField: View {
     @Binding var text: String
-    var focused: FocusState<Bool>.Binding
+    /// 每加一，搜索框就拿一次键盘焦点（⌘F）
+    var focusRequest: Int
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium)).foregroundStyle(Ink.text3)
-            TextField("搜索", text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Ink.text)
-                .focused(focused)
-                .onExitCommand {
-                    text = ""
-                    focused.wrappedValue = false
-                }
+            FocusableTextField(text: $text, placeholder: "搜索", focusRequest: focusRequest)
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 13)).foregroundStyle(Ink.text3)
@@ -248,6 +236,76 @@ struct SearchField: View {
             Capsule().fill(Ink.field)
                 .overlay(Capsule().stroke(Color.black.opacity(0.07), lineWidth: 1).blur(radius: 0.6).offset(y: 0.6).mask(Capsule()))
         )
+    }
+}
+
+/// 能被 ⌘F 叫来焦点的输入框。工具栏里的 SwiftUI 输入框用 @FocusState 拿不到焦点（macOS 26 上实测），
+/// 所以用 AppKit 的 NSTextField，直接让它成为第一响应者。Esc 清空并交出焦点。
+private struct FocusableTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let focusRequest: Int
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 13)
+        field.textColor = NSColor(Ink.text)
+        field.placeholderAttributedString = NSAttributedString(
+            string: placeholder,
+            attributes: [.foregroundColor: NSColor(Ink.text3), .font: NSFont.systemFont(ofSize: 13)])
+        field.cell?.usesSingleLineMode = true
+        field.cell?.lineBreakMode = .byTruncatingTail
+        field.delegate = context.coordinator
+        context.coordinator.handledRequest = focusRequest
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.text = $text
+        if field.stringValue != text { field.stringValue = text }
+        // 有新的聚焦请求：等这个输入框真的进了窗口再拿焦点（专注模式刚退出时它才刚出现）
+        if context.coordinator.handledRequest != focusRequest {
+            context.coordinator.handledRequest = focusRequest
+            focus(field, attempts: 20)
+        }
+    }
+
+    /// 输入框可能还没进窗口（专注模式刚退出、窗口刚出来）：每隔 50 毫秒再试，最多试 `attempts` 次。
+    private func focus(_ field: NSTextField, attempts: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard let window = field.window else {
+                if attempts > 1 { focus(field, attempts: attempts - 1) }
+                return
+            }
+            window.makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var handledRequest = 0
+
+        init(text: Binding<String>) { self.text = text }
+
+        func controlTextDidChange(_ note: Notification) {
+            guard let field = note.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+            text.wrappedValue = ""
+            control.stringValue = ""
+            control.window?.makeFirstResponder(nil)
+            return true
+        }
     }
 }
 

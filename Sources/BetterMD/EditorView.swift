@@ -61,7 +61,11 @@ struct EditorView: View {
                     MoreMenu(note: note)
                 }
             }
-            .onChange(of: window.focusMode, initial: true) { _, on in handle.setFocusMode(on) }
+            .onChange(of: window.focusMode, initial: true) { _, on in
+                handle.setFocusMode(on)
+                // 列表收起来了，键盘焦点交给编辑器（Esc 退出专注模式也靠编辑器）
+                if on { handle.focusEditor() }
+            }
     }
 
     /// 从 Finder 选图片或文件，存进「附件/」，插在光标处。

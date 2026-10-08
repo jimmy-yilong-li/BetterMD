@@ -141,7 +141,7 @@ struct MarkdownEditor: NSViewRepresentable {
         /// ⌘ 点链接：网址交给浏览器等默认程序；「我的笔记」里的笔记直接打开，别的文件用默认程序打开。
         private func open(url: String?, path: String?) {
             if let url, let target = URL(string: url), let scheme = target.scheme?.lowercased(),
-               !["javascript", "file", "data"].contains(scheme) {
+               ["http", "https", "mailto", "tel", "ftp", "x-apple.systempreferences", "maps", "facetime"].contains(scheme) {
                 NSWorkspace.shared.open(target)
             } else if let path, let file = model.store.resolveFile(path) {
                 let standard = file.standardizedFileURL
@@ -188,6 +188,13 @@ final class EditorHandle {
         webView.callAsyncJavaScript("window.bettermd.format(kind)", arguments: ["kind": kind], in: nil, in: .page, completionHandler: nil)
     }
 
+    /// 让编辑器拿到键盘焦点。
+    func focusEditor() {
+        guard let webView else { return }
+        webView.window?.makeFirstResponder(webView)
+        webView.callAsyncJavaScript("window.bettermd?.focus()", arguments: [:], in: nil, in: .page, completionHandler: nil)
+    }
+
     /// 专注模式：编辑区里光标所在的那一段以外都变淡。
     func setFocusMode(_ on: Bool) {
         webView?.callAsyncJavaScript("window.bettermd?.setFocusMode(on)", arguments: ["on": on], in: nil, in: .page, completionHandler: nil)
@@ -205,7 +212,7 @@ final class EditorHandle {
 
 /// 编辑区的纸色（和 editor.css 里的 --paper 一致），网页加载出来之前先铺上，不闪白。
 enum Paper {
-    @MainActor static let nsColor = NSColor(name: "BetterMDPaper") { appearance in
+    @MainActor static let nsColor = NSColor(name: "BetterMDPaper") { @Sendable appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(srgbRed: 0x1A / 255, green: 0x18 / 255, blue: 0x16 / 255, alpha: 1)
             : NSColor(srgbRed: 0xFB / 255, green: 0xF8 / 255, blue: 0xF2 / 255, alpha: 1)

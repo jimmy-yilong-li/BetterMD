@@ -53,13 +53,13 @@ enum Ink {
     // MARK: 内部
 
     private static func color(_ light: UInt32, _ dark: UInt32) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
+        Color(nsColor: NSColor(name: nil) { @Sendable appearance in
             nsColor(isDark(appearance) ? dark : light)
         })
     }
 
     private static func color(rgba light: (Int, Int, Int, Double), _ dark: (Int, Int, Int, Double)) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
+        Color(nsColor: NSColor(name: nil) { @Sendable appearance in
             let c = isDark(appearance) ? dark : light
             return NSColor(srgbRed: CGFloat(c.0) / 255, green: CGFloat(c.1) / 255, blue: CGFloat(c.2) / 255, alpha: c.3)
         })

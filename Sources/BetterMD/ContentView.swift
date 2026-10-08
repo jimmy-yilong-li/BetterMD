@@ -29,6 +29,7 @@ struct ContentView: View {
                         .allowsHitTesting(!window.focusMode)
                     EditorView()
                 }
+                .animation(Motion.columns, value: window.focusMode)
             }
         }
         .tint(Ink.accent)
@@ -40,7 +41,7 @@ struct ContentView: View {
                     columnsBeforeFocus = columns
                     columns = .detailOnly
                 } else {
-                    columns = columnsBeforeFocus == .detailOnly ? .all : columnsBeforeFocus
+                    columns = columnsBeforeFocus // 原来侧栏是收着的，退出后还收着
                 }
             }
         }
@@ -52,6 +53,12 @@ struct ContentView: View {
             window.focusMode = (note.object as? Bool) ?? !window.focusMode
         }
         .onReceive(NotificationCenter.default.publisher(for: .showShortcuts)) { _ in window.showShortcuts = true }
+        .onReceive(NotificationCenter.default.publisher(for: .focusSearch)) { note in
+            // ⌘F / ⌘⇧F：专注模式里先退出（列表和搜索框才回来），再让搜索框拿到焦点
+            if window.focusMode { window.focusMode = false }
+            if note.object as? Bool == true { model.searchAll = true }
+            window.searchFocusRequest += 1
+        }
         .sheet(isPresented: Bindable(window).showShortcuts) { ShortcutsView() }
         .alert("出了点问题", isPresented: errorShown) {
             Button("知道了") { model.lastError = nil }

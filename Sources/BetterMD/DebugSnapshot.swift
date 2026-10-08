@@ -11,6 +11,8 @@ import WebKit
 /// `-snapshotTag 会议` 标签筛选；`-snapshotQuery 词` 搜索；`-snapshotFocus YES` 专注模式。
 /// 没有屏幕录制权限时，用它检查界面。正常启动不受影响。
 enum DebugSnapshot {
+    @MainActor private static var probes: [String] = []
+
     @MainActor
     static func runIfRequested(model: AppModel) async {
         let defaults = UserDefaults.standard
@@ -35,6 +37,16 @@ enum DebugSnapshot {
         if defaults.bool(forKey: "snapshotFocus") {
             try? await Task.sleep(for: .seconds(1.5))
             NotificationCenter.default.post(name: .toggleFocusMode, object: true)
+        }
+        if defaults.bool(forKey: "snapshotFocusSearch") {
+            try? await Task.sleep(for: .seconds(1.0))
+            NotificationCenter.default.post(name: .focusSearch, object: false)
+            for delay in [0.05, 0.3, 1.0] {
+                try? await Task.sleep(for: .seconds(delay))
+                let responder = NSApplication.shared.windows.first(where: \.isVisible)?.firstResponder
+                let owner = (responder as? NSTextView)?.delegate.map { "\(type(of: $0))" } ?? ""
+                probes.append("⌘F 后 \(delay)s：\(responder.map { "\(type(of: $0))" } ?? "nil") \(owner)")
+            }
         }
         try? await Task.sleep(for: .seconds(2.5))
         defer { NSApplication.shared.terminate(nil) }
@@ -114,6 +126,13 @@ enum DebugSnapshot {
         }
         walk(root)
         lines.append("menuKeys=" + menuKeys(NSApplication.shared.mainMenu).joined(separator: " "))
+        if let responder = root.window?.firstResponder {
+            // 输入框拿到焦点时，第一响应者是它的字段编辑器（NSTextView），真正的输入框是它的代理
+            let owner = (responder as? NSTextView)?.delegate.map { "\(type(of: $0))" } ?? ""
+            lines.append("firstResponder=\(type(of: responder)) \(owner)")
+        }
+        lines.append("windows=\(NSApplication.shared.windows.filter(\.isVisible).count)")
+        lines.append(contentsOf: probes)
         lines.append("scope=\(model.scope) selected=\(model.selectedNote?.title ?? "无")")
         lines.append("folders=\(model.folders)")
         lines.append("tags=\(model.tagTree.map(\.path))")

@@ -67,7 +67,10 @@ struct NoteRow: View {
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .task(id: thumbnailKey) { thumbnail = await Thumbnails.shared.image(for: note, in: model.store) }
+        .task(id: thumbnailKey) {
+            let image = await Thumbnails.shared.image(for: note, in: model.store)
+            if !Task.isCancelled { thumbnail = image } // 笔记已经变了：旧图不要写回
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }

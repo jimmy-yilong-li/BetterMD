@@ -14,6 +14,8 @@ final class WindowState {
     /// 专注模式：侧栏和列表收起，只留编辑区；编辑区里光标所在的那一段以外都变淡。
     var focusMode = false
     var showShortcuts = false
+    /// ⌘F：每加一，列表上方的搜索框就拿一次焦点
+    var searchFocusRequest = 0
 }
 
 /// 快捷键表：键帽样式。
