@@ -41,6 +41,13 @@ export const metaState = StateField.define({
   },
 });
 
+// ---- 字数：只在正文变了时重算 ----
+export const wordCountState = StateField.define({
+  create: state => countWords(bodyAfterTitle(state.doc)),
+  update: (value, tr) => (tr.docChanged ? countWords(bodyAfterTitle(tr.state.doc)) : value),
+});
+const bodyAfterTitle = doc => (doc.lines > 1 ? doc.sliceString(doc.line(1).to) : '');
+
 // ---- 专注模式：光标所在的那一段保持清楚，其他段落变淡 ----
 export const setFocusMode = StateEffect.define();
 export const focusModeState = StateField.define({
@@ -153,6 +160,7 @@ function build(state) {
           const url = node.node.getChild('URL');
           const marks = node.node.getChildren('LinkMark');
           if (!url || marks.length < 2) return; // [文字] 这类引用式写法，原样显示
+          if (marks[0].to === marks[1].from) { add(dim, from, to); return; } // [](地址)：没有文字，露出原文
           const target = resolveTarget(dir, doc.sliceString(url.from, url.to));
           const attrs = target?.url ? { 'data-url': target.url } : target?.path ? { 'data-path': target.path } : {};
           add(Decoration.mark({ class: 'cm-link', attributes: attrs }), marks[0].to, marks[1].from);
@@ -328,7 +336,7 @@ function build(state) {
   // 标题下面一行小字：修改时间 · 所在文件夹 · 字数
   const meta = state.field(metaState, false) ?? null;
   if (meta && doc.lines > 0 && /^#{1,6}\s/.test(doc.line(1).text)) {
-    const words = countWords(doc.sliceString(doc.line(1).to));
+    const words = state.field(wordCountState, false) ?? countWords(bodyAfterTitle(doc));
     const parts = [meta.modified, meta.folder, `${words.toLocaleString('en-US')} 字`].filter(Boolean);
     add(Decoration.widget({ widget: new MetaWidget(parts), block: true, side: 1 }), doc.line(1).to);
   }
@@ -337,11 +345,11 @@ function build(state) {
   if (state.field(focusModeState, false) && focused) {
     const head = state.selection.main.head;
     let block = null;
-    for (let n = syntaxTree(state).resolveInner(head, -1); n && n.parent; n = n.parent) {
-      if (n.parent.name === 'Document') { block = n; break; }
+    for (let n = syntaxTree(state).topNode.firstChild; n; n = n.nextSibling) {
+      if (n.from <= head && head <= n.to) { block = n; break; }
     }
-    const from = block && block.from <= head && block.to >= head ? block.from : doc.lineAt(head).from;
-    const to = block && block.from <= head && block.to >= head ? block.to : doc.lineAt(head).to;
+    const from = block ? block.from : doc.lineAt(head).from;
+    const to = block ? block.to : doc.lineAt(head).to;
     eachLine(from, to, line => add(lineClass('cm-active-block'), line.from));
   }
 

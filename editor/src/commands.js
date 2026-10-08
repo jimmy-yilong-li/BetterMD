@@ -68,13 +68,13 @@ export function insertMath(view) {
   return toggleWrap('$')(view);
 }
 
-/** 选中的每一行。 */
+/** 选中的每一行。选区刚好停在某一行开头（三击选中一行、Shift+↓）时，那一行不算。 */
 function selectedLines(state) {
   const lines = new Map();
   for (const r of state.selection.ranges) {
     for (let pos = r.from; pos <= r.to;) {
       const line = state.doc.lineAt(pos);
-      lines.set(line.number, line);
+      if (!(r.to > r.from && line.from === r.to && line.from > r.from)) lines.set(line.number, line);
       pos = line.to + 1;
     }
   }
@@ -140,7 +140,10 @@ export function toggleLinePrefix(prefix) {
   };
 }
 
-/** 插入一整块（分割线、代码块、表格）：当前行是空的就放在这一行，否则放到下一行。`cursor` 是插入后光标在块里的位置。 */
+/**
+ * 插入一整块（分割线、代码块、表格）：当前行是空的就放在这一行，否则另起一段（前面空一行，
+ * 不然“文字\n---”会变成标题）。后面紧跟着文字时也空一行。`cursor` 是插入后光标在块里的位置。
+ */
 export function insertBlock(text, cursor = text.length) {
   return view => {
     if (view.state.readOnly) return false;
@@ -148,11 +151,36 @@ export function insertBlock(text, cursor = text.length) {
     const line = state.doc.lineAt(state.selection.main.head);
     const empty = line.text.trim() === '';
     const from = empty ? line.from : line.to;
-    const prefix = empty ? '' : '\n';
+    const prefix = empty ? '' : '\n\n';
+    const next = line.number < state.doc.lines ? state.doc.line(line.number + 1) : null;
+    const suffix = next && next.text.trim() !== '' && !text.endsWith('\n') ? '\n' : '';
     format(view, {
-      changes: { from, to: empty ? line.to : line.to, insert: prefix + text },
+      changes: { from, to: line.to, insert: prefix + text + suffix },
       selection: { anchor: from + prefix.length + cursor },
     });
+    return true;
+  };
+}
+
+const LIST_MARK = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
+
+/** 列表、编号列表：选中的行都已经是这种列表就去掉符号，否则换成这种（已有的别种列表符号直接替换，不叠加）。 */
+export function toggleList(kind) {
+  return view => {
+    if (view.state.readOnly) return false;
+    const lines = selectedLines(view.state);
+    const isKind = line => kind === 'bullet' ? /^\s*[-*+]\s/.test(line.text) : /^\s*\d+[.)]\s/.test(line.text);
+    const remove = lines.every(isKind);
+    let n = 0;
+    const changes = lines.map(line => {
+      const m = LIST_MARK.exec(line.text);
+      const indent = m ? m[1].length : /^\s*/.exec(line.text)[0].length;
+      const to = m ? line.from + m[0].length : line.from + indent;
+      n += 1;
+      const insert = remove ? '' : kind === 'bullet' ? '- ' : `${n}. `;
+      return { from: line.from + indent, to, insert };
+    });
+    formatLines(view, changes);
     return true;
   };
 }

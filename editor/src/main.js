@@ -14,8 +14,9 @@ import { mathSyntax } from './math.js';
 import { codeLanguages } from './languages.js';
 import {
   livePreview, mathTooltip, focusState, focusTracker, dirState, setDir, setFocus, metaState, setMeta, focusModeState, setFocusMode,
+  wordCountState,
 } from './livePreview.js';
-import { toggleWrap, insertLink, insertMath, setHeading, toggleTodo, toggleLinePrefix, insertBlock } from './commands.js';
+import { toggleWrap, insertLink, insertMath, setHeading, toggleTodo, toggleLinePrefix, toggleList, insertBlock } from './commands.js';
 import { countParagraphs } from './helpers.js';
 import { post } from './bridge.js';
 
@@ -88,12 +89,16 @@ const extensions = [
   drawSelection(),
   dropCursor(),
   EditorView.lineWrapping,
-  markdown({ base: markdownLanguage, codeLanguages, extensions: [mathSyntax], addKeymap: false }),
+  // 不要下标、上标语法：中文里“3~5 次”这种范围写法会被当成下标
+  markdown({ base: markdownLanguage, codeLanguages, extensions: [mathSyntax, { remove: ['Subscript', 'Superscript'] }], addKeymap: false }),
+  wordCountState,
+  EditorView.updateListener.of(movePendingInserts),
   syntaxHighlighting(inkStyle),
   focusState, focusTracker, dirState, metaState, focusModeState, livePreview, mathTooltip, folding,
   placeholder('开始写…'),
   yuanToDollars,
-  keymap.of([...formatKeys, ...markdownKeymap, ...foldKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+  // ⌘/ 留给 App 的「键盘快捷键」，不要默认的“切换注释”
+  keymap.of([...formatKeys, ...markdownKeymap, ...foldKeymap, ...defaultKeymap.filter(b => b.key !== 'Mod-/'), ...historyKeymap, indentWithTab]),
   EditorView.updateListener.of(onUpdate),
   EditorView.domEventHandlers({ mousedown: onMouseDown, paste: onPaste, drop: onDrop, compositionend: onCompositionEnd }),
 ];
@@ -200,13 +205,18 @@ function updateDocument(text, dir, ro, seq, meta) {
   const old = view.state.doc.toString();
   // App 是在收到我们最新的改动之前做的这份内容：刚打的字比它新，不能被盖掉。
   // 这时只更新文件夹和只读状态，再把正文重发一遍，让 App 以编辑器里的为准。
-  const stale = typeof seq === 'number' && seq < sentSeq;
+  // 中文输入法正在拼字时也一样：动了正文会打断输入法，拼完再把正文发过去。
+  const composing = view.composing;
+  const stale = composing || (typeof seq === 'number' && seq < sentSeq);
   const changes = stale || old === text ? [] : [minimalChange(old, text)];
   if (changes.length || effects.length) {
     view.dispatch({ changes, effects, annotations: [fromApp.of(true), Transaction.addToHistory.of(false)] });
   }
   current = { ...current, dir, readOnly: ro };
-  if (stale && old !== text) sendText();
+  if (stale && old !== text) {
+    if (composing) pendingWhileComposing = true;
+    else sendText();
+  }
 }
 
 /** CodeMirror 里只有 \n 一种换行；Windows 的 \r\n 先换掉，不然对比内容时会多出空行。 */
@@ -339,16 +349,34 @@ document.addEventListener('drop', event => {
   onDrop(event, view);
 });
 
+/** 正在等 App 存附件的插入点。等的时候还能接着打字，插入点跟着正文的改动挪，存好时插在挪过以后的位置。 */
+const pendingInserts = new Set();
+
+function movePendingInserts(update) {
+  if (!update.docChanged) return;
+  for (const pending of pendingInserts) pending.pos = update.changes.mapPos(pending.pos, -1);
+}
+
 async function insertFiles(v, files, range) {
   const id = current.id;
-  const items = [];
-  for (const file of files) {
-    const data = await readBase64(file);
-    const reply = await post({ type: 'attach', id, name: file.name, mime: file.type, data });
-    if (reply?.link) items.push({ link: reply.link, name: file.name, image: file.type.startsWith('image/') });
+  // 选中的字马上删掉（和普通粘贴一样），只记下插入点
+  if (range.from !== range.to) {
+    v.dispatch({ changes: { from: range.from, to: range.to }, selection: { anchor: range.from }, userEvent: 'input.paste' });
   }
-  if (current.id !== id || !items.length) return;
-  insertAttachments(items, range);
+  const pending = { pos: range.from };
+  pendingInserts.add(pending);
+  try {
+    const items = [];
+    for (const file of files) {
+      const data = await readBase64(file);
+      const reply = await post({ type: 'attach', id, name: file.name, mime: file.type, data });
+      if (reply?.link) items.push({ link: reply.link, name: file.name, image: file.type.startsWith('image/') });
+    }
+    if (current.id !== id || !items.length) return;
+    insertAttachments(items, EditorSelection.cursor(pending.pos));
+  } finally {
+    pendingInserts.delete(pending);
+  }
 }
 
 function readBase64(file) {
@@ -374,14 +402,18 @@ function insertAttachments(items, range = view.state.selection.main) {
   const before = block && doc.sliceString(line.from, from).trim() !== '' ? '\n' : '';
   const after = block && doc.sliceString(to, doc.lineAt(to).to).trim() !== '' ? '\n' : '';
   const insert = before + text + after;
+  // 光标还在插入点（没在等的时候接着打字）就放到附件后面；否则光标留在原处
+  const cursorHere = view.state.selection.main.empty && view.state.selection.main.head === from;
   view.dispatch({
     changes: { from, to, insert },
-    selection: { anchor: from + insert.length },
+    selection: cursorHere ? { anchor: from + insert.length } : undefined,
     userEvent: 'input.paste',
-    scrollIntoView: true,
+    scrollIntoView: cursorHere,
   });
   view.focus();
 }
+
+const TABLE = '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |';
 
 /** 格式面板（Aa）里的按钮。 */
 const FORMATS = {
@@ -391,13 +423,13 @@ const FORMATS = {
   strike: toggleWrap('~~'),
   code: toggleWrap('`'),
   link: insertLink,
-  list: toggleLinePrefix('- '),
-  numbered: toggleLinePrefix('1. '),
+  list: toggleList('bullet'),
+  numbered: toggleList('number'),
   todo: toggleTodo,
   quote: toggleLinePrefix('> '),
-  rule: insertBlock('---\n'),
+  rule: insertBlock('---\n', 4),
   codeBlock: insertBlock('```\n\n```', 4),
-  table: insertBlock('| 列 1 | 列 2 |\n| --- | --- |\n|  |  |', 33),
+  table: insertBlock(TABLE, TABLE.lastIndexOf('\n') + 3), // 光标在第一个空格子里
   math: view => insertMath(view),
 };
 

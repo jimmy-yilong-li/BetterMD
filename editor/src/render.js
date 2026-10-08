@@ -28,10 +28,12 @@ const SKIP = new Set([
 const TAGS = { Emphasis: 'em', StrongEmphasis: 'strong', Strikethrough: 'del' };
 
 /** 一小段 Markdown 的行内排版（用于表格单元格）。`dir` 用来解析相对路径的图片。 */
-export function renderInline(text, dir = '') {
+export function renderInline(cell, dir = '') {
   const frag = document.createDocumentFragment();
+  // 前面垫一个零宽空格，单元格里的“1. 第一步”“- 一项”“> 引用”就不会被当成列表、引用；垫的字不画出来
+  const text = '\u200B' + cell;
   const tree = inlineParser.parse(text);
-  emit(tree.topNode, frag, tree.topNode.from, tree.topNode.to);
+  emit(tree.topNode, frag, 1, text.length);
   return frag;
 
   function emit(node, parent, from, to) {

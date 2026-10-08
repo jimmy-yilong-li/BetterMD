@@ -176,6 +176,90 @@ await drop(8, 400);
 check('拖到正文两边的空白处也能放下', (await doc()).split('![](附件/x.png)').length === 3);
 check('松手后提示框消失', !(await run('document.getElementById("editor").classList.contains("is-dropping")')));
 
+// ---- 代码审查找到的问题 ----
+// 粘贴图片后 App 还没存好时接着打字：打的字不能被盖掉
+await run(`window.slowAttach = true; const orig = window.webkit.messageHandlers.bettermd.postMessage;
+  window.webkit.messageHandlers.bettermd.postMessage = m => { window.sent.push(m);
+    return m.type === 'attach' ? new Promise(r => setTimeout(() => r({ link: '附件/x.png' }), 600)) : Promise.resolve(null); }; true`);
+await setDoc('P', 'hello world');
+await run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: 0, head: 5 } }); })()`);
+await run(`(() => { const dt = new DataTransfer();
+  const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+  dt.items.add(new File([bytes], 'image.png', { type: 'image/png' }));
+  window.bettermd.view.contentDOM.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); })()`);
+await delay(100);
+await type('Hi, ');
+await delay(900);
+check('粘贴图片时接着打字，字不会被盖掉', (await doc()).includes('Hi, ') && (await doc()).includes('![](附件/x.png)') && (await doc()).includes('world'), JSON.stringify(await doc()));
+check('最后发给 App 的就是屏幕上的内容', (await lastChange())?.text === await doc());
+
+// 中文输入法正在拼字时，App 送来同一篇的新内容（比如标题下那行时间变了）：拼的字不能丢，拼完照常发给 App
+await setDoc('I', '# 题\n\nA', { meta: { modified: '今天 10:00', folder: '未分类' } });
+await atEnd();
+await send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 });
+await delay(100);
+await setDoc('I', '# 题\n\nA', { meta: { modified: '今天 10:01', folder: '未分类' }, seq: (await lastChange())?.seq ?? 0 });
+await delay(100);
+await send('Input.insertText', { text: '你' });
+await delay(300);
+check('拼字时 App 刷新，拼完的字照常进正文并发给 App', (await doc()).endsWith('A你') && (await lastChange())?.text.endsWith('A你'), JSON.stringify(await doc()));
+
+// “3~5 次”不是下标
+await setDoc('S', '每天3~5次，持续2~3周');
+await delay(150);
+check('“3~5 次”照原样显示，不当成下标', (await run('document.querySelector(".cm-content").textContent')).includes('3~5次'));
+
+// 表格单元格里的“1. 第一步”不当成列表
+await setDoc('T', '前面一行\n\n| 步骤 | 说明 |\n| --- | --- |\n| 1. 第一步 | - 一项 |');
+await delay(150);
+check('表格单元格里的“1. 第一步”“- 一项”照原样显示', (await run('document.querySelector(".cm-table")?.textContent ?? ""')).includes('1. 第一步') && (await run('document.querySelector(".cm-table")?.textContent ?? ""')).includes('- 一项'));
+
+// 点公式：光标放在开头记号后面
+await setDoc('M', '看 \\( y = x \\) 这里\n\n\\begin{equation}\nE = mc^2\n\\end{equation}');
+await delay(200);
+await click(...await centerOf('.cm-math-inline'));
+await type('Z');
+check('点行内 \\( \\) 公式后打字，字在记号后面', (await doc()).startsWith('看 \\(Z y = x \\)'), JSON.stringify((await doc()).split('\n')[0]));
+await setDoc('M2', '前面\n\n\\begin{equation}\nE = mc^2\n\\end{equation}');
+await delay(200);
+await click(...await centerOf('.cm-math-block'));
+await type('Z');
+check('点 \\begin{equation} 公式块后打字，字在第一行末尾', (await doc()).includes('\\begin{equation}Z\n'), JSON.stringify(await doc()));
+
+// 格式命令
+await setDoc('F1', '标题行\n\n正文');
+await run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: 0, head: 4 } }); })()`);
+await key('1', 'Digit1', META);
+check('选到下一行开头再按 ⌘1，只改这一行', (await doc()) === '# 标题行\n\n正文', JSON.stringify(await doc()));
+await setDoc('F2', 'abc');
+await atEnd();
+await run('window.bettermd.format("rule")');
+check('在文字后面插分割线，中间空一行（不会把文字变成标题）', (await doc()) === 'abc\n\n---\n', JSON.stringify(await doc()));
+await setDoc('F3', '');
+await atEnd();
+await run('window.bettermd.format("table")');
+await type('甲');
+check('插入表格后光标在第一个空格子里', (await doc()).split('\n')[2] === '| 甲 |  |', JSON.stringify(await doc()));
+await setDoc('F4', '1. a\n2. b');
+await run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } }); })()`);
+await run('window.bettermd.format("numbered")');
+check('编号列表再按一次是去掉编号，不会叠成“1. 1. a”', (await doc()) === 'a\nb', JSON.stringify(await doc()));
+await setDoc('F5', '- a\nb');
+await run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } }); })()`);
+await run('window.bettermd.format("list")');
+check('一半是列表时变成列表，不会叠成“- - a”', (await doc()) === '- a\n- b', JSON.stringify(await doc()));
+
+// 空文字的链接在光标离开后还看得见
+await setDoc('L', '看 [](https://x.com) 这里');
+await delay(150);
+check('空文字的链接在光标离开后还看得见', (await run('document.querySelector(".cm-content").textContent')).includes('https://x.com'));
+
+// ⌘/ 不再把这一行变成注释
+await setDoc('C', '一行字');
+await atEnd();
+await key('/', 'Slash', META);
+check('⌘/ 不会把这一行变成 HTML 注释', (await doc()) === '一行字', JSON.stringify(await doc()));
+
 check('页面没有报错', pageErrors.length === 0, pageErrors.join(' | '));
 console.log(failures ? `\n${failures} 项没通过` : '\n全部通过');
 quit(failures ? 1 : 0);

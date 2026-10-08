@@ -112,3 +112,11 @@ test('\\begin{equation} 这类环境直接成段，源码原样交给 KaTeX', ()
   assert.deepEqual(find('\\begin{align*}\na &= b\n\\end{align*}', 'BlockMath').length, 1);
   assert.deepEqual(find('\\begin{itemize}\n\\item a\n\\end{itemize}', 'BlockMath'), []);
 });
+
+test('$$…$$ 后面还有字的是段落里的公式，\\[ 后面有字的不开公式块', () => {
+  const text = '$$E=mc^2$$ 是质能方程';
+  assert.deepEqual(find(text, 'BlockMath'), []);
+  assert.deepEqual(find(text, 'InlineMath'), ['$$E=mc^2$$']);
+  assert.deepEqual(find('\\[TODO] 修一下\n后面', 'BlockMath'), []);
+  assert.deepEqual(find('\\[TODO] 修一下\n后面', 'Paragraph').length, 1);
+});

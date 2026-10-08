@@ -13,6 +13,21 @@ function reveal(view, dom, where) {
   view.focus();
 }
 const lineEndAfter = offset => (state, pos) => Math.min(pos + offset, state.doc.lineAt(pos).to);
+/** 光标放进公式的源码：开头记号（$、$$、\(、\[）后面；\begin{…} 放在第一行末尾；```math 放在第二行开头。 */
+const insideMath = (state, pos) => {
+  for (let n = syntaxTree(state).resolveInner(pos, 1); n; n = n.parent) {
+    if (n.name === 'InlineMath' || n.name === 'BlockMath') {
+      const mark = n.getChild('InlineMathMark') ?? n.getChild('BlockMathMark');
+      if (mark && mark.from === n.from) return mark.to;
+      return Math.min(state.doc.lineAt(n.from).to, n.to);
+    }
+    if (n.name === 'FencedCode') {
+      const first = state.doc.lineAt(n.from);
+      return Math.min(first.to + 1, n.to);
+    }
+  }
+  return pos;
+};
 /** 光标放到 pos 处那个 `type` 节点的末尾。 */
 const nodeEnd = type => (state, pos) => {
   for (let n = syntaxTree(state).resolveInner(pos, 1); n; n = n.parent) {
@@ -39,7 +54,7 @@ export class MathWidget extends WidgetType {
     const el = document.createElement(this.block ? 'div' : 'span');
     el.className = this.block ? 'cm-math-block' : 'cm-math-inline';
     el.innerHTML = this.tex ? texHTML(this.tex, this.display) : '<span class="cm-math-empty">空公式</span>';
-    onPress(el, () => reveal(view, el, lineEndAfter(this.display ? 2 : 1)));
+    onPress(el, () => reveal(view, el, insideMath));
     return el;
   }
   get estimatedHeight() { return this.block ? 72 : -1; }

@@ -30,12 +30,16 @@ function blockOpener(line) {
   if (line.indent - line.baseIndent >= 4) return null;
   const text = line.text.slice(line.pos);
   if (text.startsWith('$$')) {
-    return { open: 2, close: '$$', single: text.indexOf('$$', 2) >= 0 };
+    const end = text.indexOf('$$', 2);
+    if (end < 0) return { open: 2, close: '$$', single: false };
+    // $$…$$ 后面还有字（“$$E=mc^2$$ 是质能方程”）：是段落里的公式，交给行内规则
+    return text.slice(end + 2).trim() === '' ? { open: 2, close: '$$', single: true } : null;
   }
   if (text.startsWith('\\[')) {
     const rest = text.slice(2);
     const end = rest.indexOf('\\]');
-    if (end < 0) return rest.trim() === '' || looksLikeTex(rest) ? { open: 2, close: '\\]', single: false } : null;
+    // 多行的 \[ 必须单独一行（“\[TODO] 修一下”不是公式）
+    if (end < 0) return rest.trim() === '' ? { open: 2, close: '\\]', single: false } : null;
     // 写在一行里：后面不能再有别的字，里面要像公式（“\[1\] 参考文献”是转义的方括号，不是公式）
     if (rest.slice(end + 2).trim() !== '' || !looksLikeTex(rest.slice(0, end))) return null;
     return { open: 2, close: '\\]', single: true };
