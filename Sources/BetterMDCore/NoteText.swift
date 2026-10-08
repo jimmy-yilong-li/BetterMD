@@ -24,11 +24,10 @@ public enum NoteText {
     public static func tags(in text: String) -> [String] {
         var result: [String] = []
         var seen = Set<String>()
-        var inFence = false
+        var fences = FenceTracker()
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
-            if isFence(line) { inFence.toggle(); continue }
-            if inFence { continue }
+            if fences.isCode(line) || isIndentedCode(line) { continue }
             for tag in tagsInLine(removingInlineCode(line)) where seen.insert(tag).inserted {
                 result.append(tag)
             }
@@ -38,11 +37,10 @@ public enum NoteText {
 
     /// 有没有还没勾掉的待办（`- [ ]`、`* [ ]`、`+ [ ]`）；代码块里的不算。
     public static func hasOpenTodo(_ text: String) -> Bool {
-        var inFence = false
+        var fences = FenceTracker()
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
-            if isFence(line) { inFence.toggle(); continue }
-            if inFence { continue }
+            if fences.isCode(line) { continue }
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("- [ ]") || t.hasPrefix("* [ ]") || t.hasPrefix("+ [ ]") { return true }
         }
@@ -52,11 +50,10 @@ public enum NoteText {
     /// 正文里第一张图片的地址（`![说明](地址)` 里的地址，原样返回）；代码块里的不算。没有图片返回 nil。
     public static func firstImage(in text: String) -> String? {
         guard text.contains("![") else { return nil }
-        var inFence = false
+        var fences = FenceTracker()
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
-            if isFence(line) { inFence.toggle(); continue }
-            if inFence || !line.contains("![") { continue }
+            if fences.isCode(line) || !line.contains("![") { continue }
             if let match = line.firstMatch(of: #/!\[[^\]]*\]\((<[^>\n]*>|[^)\s]+)/#) {
                 return String(match.output.1)
             }
@@ -126,6 +123,37 @@ public enum NoteText {
 
     // MARK: - 内部
 
+    /// 逐行判断在不在代码块里：``` 和 ~~~ 都算，结尾的围栏要和开头是同一种符号、而且不比开头短
+    /// （``` 代码块里出现的 ~~~ 不会被当成结尾）。
+    struct FenceTracker {
+        private var open: (mark: Character, length: Int)?
+
+        /// 这一行是代码（包括围栏那一行）就返回 true。
+        mutating func isCode(_ line: String) -> Bool {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if let current = open {
+                let run = t.prefix { $0 == current.mark }.count
+                if run >= current.length && t.dropFirst(run).trimmingCharacters(in: .whitespaces).isEmpty { open = nil }
+                return true
+            }
+            if let first = t.first, first == "`" || first == "~" {
+                let run = t.prefix { $0 == first }.count
+                if run >= 3 {
+                    open = (first, run)
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    /// 缩进 4 格（或一个 Tab）的代码行；列表项缩进的不算。
+    static func isIndentedCode(_ line: String) -> Bool {
+        guard line.hasPrefix("    ") || line.hasPrefix("\t") else { return false }
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && t.firstMatch(of: #/^(?:[-*+]|\d+[.)])\s/#) == nil
+    }
+
     static func isFence(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
         return t.hasPrefix("```") || t.hasPrefix("~~~")
@@ -133,8 +161,8 @@ public enum NoteText {
 
     /// 标签遇到这些字符就结束。
     static let tagTerminators: Set<Character> = [
-        "#", ",", ";", ":", "!", "?", "(", ")", "[", "]", "\"", "'",
-        "，", "。", "、", "；", "：", "！", "？", "（", "）", "【", "】", "「", "」", "“", "”",
+        "#", ",", ";", ":", "!", "?", "(", ")", "[", "]", "\"", "'", "*", "~", "|", "<", ">", "`",
+        "，", "。", "、", "；", "：", "！", "？", "（", "）", "【", "】", "「", "」", "“", "”", "…",
     ]
 
     static func tagsInLine(_ line: String) -> [String] {
@@ -151,7 +179,8 @@ public enum NoteText {
             var tag = String(chars[(i + 1)..<j])
             while let last = tag.last, last == "." || last == "/" { tag.removeLast() }
             while tag.first == "/" { tag.removeFirst() }
-            if !tag.isEmpty { tags.append(tag) }
+            // 纯数字不算标签（“PR #42”“第 #3 条”）
+            if !tag.isEmpty && !tag.allSatisfy(\.isNumber) { tags.append(tag) }
             i = max(j, i + 1)
         }
         return tags
@@ -178,8 +207,14 @@ public enum NoteText {
 
     /// 公式块的开头：$$、\[、\begin{…}。返回结尾记号，以及开头结尾是不是写在同一行。
     static func mathBlockOpener(_ line: String) -> (close: String, single: Bool)? {
-        if line.hasPrefix("$$") { return ("$$", line.dropFirst(2).contains("$$")) }
-        if line.hasPrefix("\\[") { return ("\\]", line.contains("\\]")) }
+        if line.hasPrefix("$$") {
+            let rest = line.dropFirst(2)
+            guard let close = rest.range(of: "$$") else { return ("$$", false) }
+            // $$…$$ 后面还有别的字：是段落里的公式，不是公式块
+            return rest[close.upperBound...].trimmingCharacters(in: .whitespaces).isEmpty ? ("$$", true) : nil
+        }
+        if line == "\\[" { return ("\\]", false) }
+        if line.hasPrefix("\\[") && line.hasSuffix("\\]") && line.count > 4 { return ("\\]", true) }
         if line.hasPrefix("\\begin{") { return ("\\end{", line.contains("\\end{")) }
         return nil
     }
@@ -194,6 +229,51 @@ public enum NoteText {
         line.contains("-") && line.wholeMatch(of: #/\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?/#) != nil
     }
 
+    /// 行内代码和公式原样保留（只去掉两头的记号），其余部分去掉 Markdown 符号。
+    static func cleanInline(_ line: String) -> String {
+        let ns = line as NSString
+        var out = ""
+        var position = 0
+        while position < ns.length {
+            let rest = NSRange(location: position, length: ns.length - position)
+            let hits = protectedSpans.compactMap { $0.firstMatch(in: line, range: rest) }
+            guard let hit = hits.min(by: { $0.range.location < $1.range.location }) else { break }
+            out += cleanText(ns.substring(with: NSRange(location: position, length: hit.range.location - position)))
+            out += ns.substring(with: hit.range(at: hit.numberOfRanges - 1))
+            position = hit.range.location + hit.range.length
+        }
+        if position < ns.length { out += cleanText(ns.substring(from: position)) }
+        return out
+    }
+
+    /// 原样保留的部分：行内代码（反引号成对）、$$…$$、$…$（“花了 $5 和 $6”这种钱数不算）、\(…\)。
+    /// 最后一个捕获组是要留下的内容。
+    static let protectedSpans: [NSRegularExpression] = [
+        #"(`+)(.+?)\1"#,
+        #"(?<!\\)\$\$(.+?)\$\$"#,
+        #"(?<!\\)\$(?![\s\d])([^$]+?)(?<![\s\\])\$(?!\d)"#,
+        #"\\\((.+?)\\\)"#,
+    ].map { try! NSRegularExpression(pattern: $0) }
+
+    /// 普通文字里的 Markdown 符号：图片、链接、成对的粗体斜体删除线（单个的 * _ 不动，“2**10”“____”照原样）、转义。
+    static func cleanText(_ text: String) -> String {
+        var s = text
+        let rules: [(String, String)] = [
+            (#"!\[([^\]]*)\]\([^)]*\)"#, "$1"),
+            (#"\[([^\]]+)\]\([^)]*\)"#, "$1"),
+            (#"\*\*(?=\S)(.+?)(?<=\S)\*\*"#, "$1"),
+            (#"(?<![\p{L}\p{N}_])__(?=\S)(.+?)(?<=\S)__(?![\p{L}\p{N}_])"#, "$1"),
+            (#"~~(?=\S)(.+?)(?<=\S)~~"#, "$1"),
+            (#"(?<!\*)\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?!\*)"#, "$1"),
+            (#"(?<![\p{L}\p{N}_])_(?=[^\s_])(.+?)(?<=[^\s_])_(?![\p{L}\p{N}_])"#, "$1"),
+            (#"\\([\\`*_{}\[\]()#+\-.!$~|>])"#, "$1"),
+        ]
+        for (pattern, template) in rules {
+            s = s.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
+        }
+        return s
+    }
+
     static func plain(_ line: String) -> String {
         var s = line
         if let r = s.range(of: #"^(#{1,6}\s+|>\s?|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)"#, options: .regularExpression) {
@@ -205,23 +285,11 @@ public enum NoteText {
                 s = "☑ " + s
             }
         }
-        s = s.replacingOccurrences(of: #"!\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
-        // 公式只留 LaTeX 源码；“花了 $5 和 $6”这种钱数不动
-        s = s.replacingOccurrences(of: #"(?<!\\)\$\$(.+?)\$\$"#, with: "$1", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"(?<!\\)\$(?![\s\d])([^$]+?)(?<![\s\\])\$(?!\d)"#, with: "$1", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"\\\((.+?)\\\)"#, with: "$1", options: .regularExpression)
-        for token in ["**", "__", "~~", "`"] {
-            s = s.replacingOccurrences(of: token, with: "")
-        }
-        // 单个 * 的斜体可以在词中间（“是*信号处理*的”）；单个 _ 的不行（snake_case 不动）
-        s = s.replacingOccurrences(of: #"\*(?![\s*])([^*]+?)(?<![\s*])\*"#, with: "$1", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"(?<![\p{L}\p{N}_])_(?![\s_])([^_]+?)(?<![\s_])_(?![\p{L}\p{N}_])"#, with: "$1", options: .regularExpression)
+        s = cleanInline(s)
         // 表格的一行：去掉竖线
         if s.hasPrefix("|") {
             s = s.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
         }
-        s = s.replacingOccurrences(of: "\\$", with: "$")
         return s.trimmingCharacters(in: .whitespaces)
     }
 }

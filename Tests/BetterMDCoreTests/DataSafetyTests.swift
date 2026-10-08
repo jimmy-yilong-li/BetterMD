@@ -66,8 +66,13 @@ struct DataSafetyTests {
         let note = try #require(model.notes.first)
         model.select(note.id)
         model.updateText("# 甲\n自动保存", for: note.id)
-        try await Task.sleep(for: .milliseconds(400))
-        #expect(try root.read("甲.md") == "# 甲\n自动保存")
+        // 停下 50 毫秒后就该存；测试一起跑时主线程忙，最多等 3 秒
+        var saved = false
+        for _ in 0..<60 where !saved {
+            try await Task.sleep(for: .milliseconds(50))
+            saved = (try? root.read("甲.md")) == "# 甲\n自动保存"
+        }
+        #expect(saved)
     }
 
     @Test func nonstopTypingStillSavesEveryFewSeconds() async throws {

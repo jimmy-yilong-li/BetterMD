@@ -1,7 +1,7 @@
 // 不依赖浏览器的小工具：找标签、拆表格、解析图片和链接路径。都可以直接在 Node 里测试。
 
 // 标签遇到这些字符就结束（和 Swift 端 NoteText.tagTerminators 保持一致）。
-const TAG_END = new Set('#,;:!?()[]"\'，。、；：！？（）【】「」“”');
+const TAG_END = new Set('#,;:!?()[]"\'*~|<>`，。、；：！？（）【】「」“”…');
 const isBlank = ch => /\s/.test(ch);
 
 /**
@@ -23,8 +23,10 @@ export function findTags(line) {
     let start = i + 1, end = j;
     while (end > start && (chars[end - 1] === '.' || chars[end - 1] === '/')) end--;
     while (start < end && chars[start] === '/') start++;
-    if (end > start) {
-      out.push({ from: offsets[i], to: offsets[end], name: chars.slice(start, end).join('') });
+    const name = chars.slice(start, end).join('');
+    // 纯数字不算标签（“PR #42”）
+    if (end > start && !/^\p{N}+$/u.test(name)) {
+      out.push({ from: offsets[i], to: offsets[end], name });
     }
     i = Math.max(j, i + 1);
   }

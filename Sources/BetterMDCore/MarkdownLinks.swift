@@ -13,16 +13,11 @@ public enum MarkdownLinks {
     /// 网址、页内锚点、以 / 开头的路径、跳出「我的笔记」的路径、代码块里的内容都不动。
     public static func rebase(_ text: String, from oldFolder: String, to newFolder: String) -> String {
         guard oldFolder != newFolder, text.contains("](") || text.contains("]:") else { return text }
-        var inFence = false
+        var fences = NoteText.FenceTracker()
         var lines: [String] = []
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
-            if NoteText.isFence(line) {
-                inFence.toggle()
-                lines.append(line)
-            } else {
-                lines.append(inFence ? line : rebaseLine(line, from: oldFolder, to: newFolder))
-            }
+            lines.append(fences.isCode(line) ? line : rebaseLine(line, from: oldFolder, to: newFolder))
         }
         return lines.joined(separator: "\n")
     }
@@ -55,10 +50,12 @@ public enum MarkdownLinks {
     private static var destination: Regex<(Substring, Substring, Substring)> {
         #/\]\((<[^>\n]*>|(?:[^()\s]|\([^()\s]*\))+)((?:\s+(?:"[^"]*"|'[^']*'))?\s*)\)/#
     }
-    /// 引用式链接的定义：`[名字]: 地址 "标题"`。脚注（`[^1]: …`）不算。
+    /// 引用式链接的定义：`[名字]: 地址 "标题"`，地址后面只能有标题。脚注（`[^1]: …`）不算。
     private static var definition: Regex<(Substring, Substring, Substring, Substring)> {
-        #/^( {0,3}\[[^\]^][^\]]*\]:[ \t]*)(<[^>\n]*>|\S+)(.*)$/#
+        #/^( {0,3}\[[^\]^][^\]]*\]:[ \t]*)(<[^>\n]*>|\S+)((?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*)$/#
     }
+    /// 行内代码（反引号成对）。里面像链接的文字不是链接。
+    private static var codeSpan: Regex<(Substring, Substring)> { #/(`+).+?\1/# }
     private static var scheme: Regex<Substring> { #/^[A-Za-z][A-Za-z0-9+.\-]*:/# }
 
     static func rebaseLine(_ line: String, from oldFolder: String, to newFolder: String) -> String {
@@ -70,8 +67,10 @@ public enum MarkdownLinks {
             return String(def.output.1) + moved + String(def.output.3)
         }
         guard line.contains("](") else { return line }
+        let code = line.matches(of: codeSpan).map(\.range)
         return line.replacing(destination) { match in
-            guard let moved = rebasePath(String(match.output.1), from: oldFolder, to: newFolder) else {
+            guard !code.contains(where: { $0.overlaps(match.range) }),
+                  let moved = rebasePath(String(match.output.1), from: oldFolder, to: newFolder) else {
                 return String(match.output.0)
             }
             return "](" + moved + match.output.2 + ")"
@@ -114,12 +113,15 @@ public enum MarkdownLinks {
         return Array(repeating: "..", count: folder.count - common) + target[common...]
     }
 
-    /// 链接里不能直接出现的字符转义掉；中文照原样写，好认。
+    /// 链接里不能直接出现的字符转义掉（各种空白都算）；中文照原样写，好认。
     static func encode(_ segment: String) -> String {
         var out = ""
         for ch in segment {
+            if ch.isWhitespace {
+                out += ch.utf8.map { String(format: "%%%02X", $0) }.joined()
+                continue
+            }
             switch ch {
-            case " ": out += "%20"
             case "(": out += "%28"
             case ")": out += "%29"
             case "<": out += "%3C"
@@ -127,7 +129,6 @@ public enum MarkdownLinks {
             case "%": out += "%25"
             case "#": out += "%23"
             case "?": out += "%3F"
-            case "\t": out += "%09"
             default: out.append(ch)
             }
         }

@@ -68,3 +68,9 @@ test('字数：汉字一个一个算，英文按词算', () => {
   assert.equal(countWords("don't stop"), 2);
   assert.equal(countWords(''), 0);
 });
+
+test('标签：纯数字不算，…*~ 等是结尾（和 Swift 端一致）', () => {
+  assert.deepEqual(names('PR #42 和颜色 #FF0000'), ['FF0000']);
+  assert.deepEqual(names('#想法……然后'), ['想法']);
+  assert.deepEqual(names('#重要**'), ['重要']);
+});
