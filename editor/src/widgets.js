@@ -228,3 +228,23 @@ export class TableWidget extends WidgetType {
   }
   get estimatedHeight() { return 44 + 40 * (this.source.split('\n').length - 2); }
 }
+
+/** 标题下面的一行小字：修改时间 · 所在文件夹 · 字数。 */
+export class MetaWidget extends WidgetType {
+  constructor(parts) {
+    super();
+    this.parts = parts;
+  }
+  eq(other) { return other.parts.join('|') === this.parts.join('|'); }
+  toDOM() {
+    const el = document.createElement('div');
+    el.className = 'cm-meta';
+    this.parts.forEach((part, i) => {
+      if (i) el.append(Object.assign(document.createElement('i'), { ariaHidden: 'true' }));
+      el.append(Object.assign(document.createElement('span'), { textContent: part }));
+    });
+    return el;
+  }
+  ignoreEvent() { return true; }
+  get estimatedHeight() { return 30; }
+}

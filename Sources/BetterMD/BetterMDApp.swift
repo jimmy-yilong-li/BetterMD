@@ -31,6 +31,21 @@ struct BetterMDApp: App {
                 Divider()
                 Button("选择笔记库位置…") { chooseLibrary() }
             }
+            CommandGroup(after: .pasteboard) {
+                Divider()
+                Button("搜索") { NotificationCenter.default.post(name: .focusSearch, object: false) }
+                    .keyboardShortcut("f")
+                Button("搜索全部笔记") { NotificationCenter.default.post(name: .focusSearch, object: true) }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+            }
+            CommandGroup(after: .sidebar) {
+                Button("专注模式") { NotificationCenter.default.post(name: .toggleFocusMode, object: nil) }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+            }
+            CommandGroup(replacing: .help) {
+                Button("键盘快捷键") { NotificationCenter.default.post(name: .showShortcuts, object: nil) }
+                    .keyboardShortcut("/")
+            }
             CommandGroup(replacing: .saveItem) {
                 Button("立即保存") { model.flushPendingSave() }
                     .keyboardShortcut("s")

@@ -27,6 +27,27 @@ public enum MarkdownLinks {
         return lines.joined(separator: "\n")
     }
 
+    /// 正文里的地址指向「我的笔记」里的哪个文件：返回相对「我的笔记」的路径（已解码 %20 这类转义）。
+    /// `folder` 是笔记所在的文件夹。网址、页内锚点、跳出「我的笔记」的返回 nil；以 / 开头的按根目录算。
+    public static func resolve(_ written: String, from folder: String) -> String? {
+        var dest = written.trimmingCharacters(in: .whitespaces)
+        if dest.hasPrefix("<") && dest.hasSuffix(">") { dest = String(dest.dropFirst().dropLast()) }
+        guard !dest.isEmpty, !dest.hasPrefix("#"), dest.firstMatch(of: scheme) == nil else { return nil }
+        let cut = dest.firstIndex(where: { $0 == "?" || $0 == "#" }) ?? dest.endIndex
+        var parts = dest.hasPrefix("/") ? [] : segments(folder)
+        for raw in dest[..<cut].split(separator: "/") {
+            let part = raw.removingPercentEncoding ?? String(raw)
+            if part == "." { continue }
+            if part == ".." {
+                if parts.isEmpty { return nil }
+                parts.removeLast()
+            } else {
+                parts.append(part)
+            }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "/")
+    }
+
     // MARK: - 内部
 
     /// `](地址)` 或 `](地址 "标题")`；地址可以写在尖括号里，也可以带一层成对的括号，比如 `图(1).png`。

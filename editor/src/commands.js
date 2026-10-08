@@ -121,3 +121,38 @@ function formatLines(view, changes) {
   const set = view.state.changes(changes);
   format(view, { changes: set, selection: view.state.selection.map(set, 1) });
 }
+
+/** 列表、引用这类行首符号：选中的行都有就去掉，否则加上（加在缩进后面）。 */
+export function toggleLinePrefix(prefix) {
+  return view => {
+    if (view.state.readOnly) return false;
+    const lines = selectedLines(view.state);
+    const has = line => line.text.trimStart().startsWith(prefix);
+    const remove = lines.every(has);
+    const changes = lines.map(line => {
+      const indent = /^\s*/.exec(line.text)[0].length;
+      return remove
+        ? { from: line.from + indent, to: line.from + indent + prefix.length }
+        : { from: line.from + indent, insert: prefix };
+    });
+    formatLines(view, changes);
+    return true;
+  };
+}
+
+/** 插入一整块（分割线、代码块、表格）：当前行是空的就放在这一行，否则放到下一行。`cursor` 是插入后光标在块里的位置。 */
+export function insertBlock(text, cursor = text.length) {
+  return view => {
+    if (view.state.readOnly) return false;
+    const { state } = view;
+    const line = state.doc.lineAt(state.selection.main.head);
+    const empty = line.text.trim() === '';
+    const from = empty ? line.from : line.to;
+    const prefix = empty ? '' : '\n';
+    format(view, {
+      changes: { from, to: empty ? line.to : line.to, insert: prefix + text },
+      selection: { anchor: from + prefix.length + cursor },
+    });
+    return true;
+  };
+}

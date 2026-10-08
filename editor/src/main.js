@@ -12,8 +12,10 @@ import {
 import { tags as t } from '@lezer/highlight';
 import { mathSyntax } from './math.js';
 import { codeLanguages } from './languages.js';
-import { livePreview, mathTooltip, focusState, focusTracker, dirState, setDir, setFocus } from './livePreview.js';
-import { toggleWrap, insertLink, insertMath, setHeading, toggleTodo } from './commands.js';
+import {
+  livePreview, mathTooltip, focusState, focusTracker, dirState, setDir, setFocus, metaState, setMeta, focusModeState, setFocusMode,
+} from './livePreview.js';
+import { toggleWrap, insertLink, insertMath, setHeading, toggleTodo, toggleLinePrefix, insertBlock } from './commands.js';
 import { countParagraphs } from './helpers.js';
 import { post } from './bridge.js';
 
@@ -42,6 +44,7 @@ const inkStyle = HighlightStyle.define([
 ]);
 
 const formatKeys = [
+  { key: 'Escape', run: () => { if (!focusMode) return false; post({ type: 'exitFocus' }); return true; } },
   { key: 'Mod-b', run: toggleWrap('**') },
   { key: 'Mod-i', run: toggleWrap('*') },
   { key: 'Mod-Shift-x', run: toggleWrap('~~') },
@@ -87,7 +90,7 @@ const extensions = [
   EditorView.lineWrapping,
   markdown({ base: markdownLanguage, codeLanguages, extensions: [mathSyntax], addKeymap: false }),
   syntaxHighlighting(inkStyle),
-  focusState, focusTracker, dirState, livePreview, mathTooltip, folding,
+  focusState, focusTracker, dirState, metaState, focusModeState, livePreview, mathTooltip, folding,
   placeholder('开始写…'),
   yuanToDollars,
   keymap.of([...formatKeys, ...markdownKeymap, ...foldKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
@@ -95,12 +98,18 @@ const extensions = [
   EditorView.domEventHandlers({ mousedown: onMouseDown, paste: onPaste, drop: onDrop, compositionend: onCompositionEnd }),
 ];
 
-function makeState(text, dir, ro) {
+function makeState(text, dir, ro, meta = null) {
   return EditorState.create({
     doc: text,
-    extensions: [extensions, readOnly.of(readOnlyConfig(ro)), dirState.init(() => dir)],
+    extensions: [
+      extensions, readOnly.of(readOnlyConfig(ro)), dirState.init(() => dir), metaState.init(() => meta),
+      focusModeState.init(() => focusMode),
+    ],
   });
 }
+
+/** 专注模式开着吗（换笔记时带到新的编辑器状态里）。 */
+let focusMode = false;
 
 const host = document.getElementById('editor');
 const view = new EditorView({ state: makeState('', '', true), parent: host });
@@ -153,13 +162,14 @@ function setDocument(id, rawText, options = {}) {
   const text = normalize(rawText);
   const dir = options.dir ?? '';
   const ro = !!options.readOnly;
+  const meta = options.meta ?? null;
   flushComposing();
   if (id === current.id) {
-    updateDocument(text, dir, ro, options.seq);
+    updateDocument(text, dir, ro, options.seq, meta);
     return;
   }
   // 先建好新笔记的编辑器状态；换的过程中 current 不指向任何笔记，万一出错，打的字也不会记到别的笔记上
-  const state = makeState(text, dir, ro);
+  const state = makeState(text, dir, ro, meta);
   remember();
   current = { id: null, dir: '', readOnly: true };
   view.setState(state);
@@ -181,9 +191,11 @@ function setDocument(id, rawText, options = {}) {
 }
 
 /** 同一篇笔记，App 那边有了新内容。 */
-function updateDocument(text, dir, ro, seq) {
+function updateDocument(text, dir, ro, seq, meta) {
   const effects = [];
   if (dir !== current.dir) effects.push(setDir.of(dir));
+  const oldMeta = view.state.field(metaState);
+  if (JSON.stringify(oldMeta) !== JSON.stringify(meta)) effects.push(setMeta.of(meta));
   if (ro !== current.readOnly) effects.push(readOnly.reconfigure(readOnlyConfig(ro)));
   const old = view.state.doc.toString();
   // App 是在收到我们最新的改动之前做的这份内容：刚打的字比它新，不能被盖掉。
@@ -371,9 +383,43 @@ function insertAttachments(items, range = view.state.selection.main) {
   view.focus();
 }
 
+/** 格式面板（Aa）里的按钮。 */
+const FORMATS = {
+  heading: setHeading(2),
+  bold: toggleWrap('**'),
+  italic: toggleWrap('*'),
+  strike: toggleWrap('~~'),
+  code: toggleWrap('`'),
+  link: insertLink,
+  list: toggleLinePrefix('- '),
+  numbered: toggleLinePrefix('1. '),
+  todo: toggleTodo,
+  quote: toggleLinePrefix('> '),
+  rule: insertBlock('---\n'),
+  codeBlock: insertBlock('```\n\n```', 4),
+  table: insertBlock('| 列 1 | 列 2 |\n| --- | --- |\n|  |  |', 33),
+  math: view => insertMath(view),
+};
+
+function format(kind) {
+  const run = FORMATS[kind];
+  if (!run || view.state.readOnly) return;
+  view.focus();
+  run(view);
+}
+
+/** 专注模式：其他段落变淡；Esc 退出（交给 App 一起把侧栏和列表放回来）。 */
+function setFocusModeOn(on) {
+  focusMode = !!on;
+  host.classList.toggle('is-focus-mode', focusMode);
+  view.dispatch({ effects: setFocusMode.of(focusMode) });
+}
+
 window.bettermd = {
   setDocument,
   clear,
+  format,
+  setFocusMode: setFocusModeOn,
   insertAttachments: items => insertAttachments(items),
   focus: () => view.focus(),
   view,

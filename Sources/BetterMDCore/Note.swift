@@ -63,6 +63,8 @@ public struct ParsedNote: Hashable, Sendable {
     public let preview: String
     /// 用 `SearchText.fold` 处理过的全文，搜索时直接比对。
     public let searchKey: String
+    /// 第一张图片的地址（原样），列表里显示缩略图用。
+    public let firstImage: String?
 
     public init(text: String) {
         title = NoteText.title(of: text)
@@ -70,5 +72,6 @@ public struct ParsedNote: Hashable, Sendable {
         hasOpenTodo = NoteText.hasOpenTodo(text)
         preview = NoteText.preview(of: text)
         searchKey = SearchText.fold(text)
+        firstImage = NoteText.firstImage(in: text)
     }
 }

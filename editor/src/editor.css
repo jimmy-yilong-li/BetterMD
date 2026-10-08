@@ -393,3 +393,27 @@ body::before {
   #editor *, #editor *::before, #editor::after { animation: none !important; transition: none !important; }
   #editor.enter .cm-content { animation: none; }
 }
+
+/* ---- 标题下面的一行小字：修改时间 · 所在文件夹 · 字数 ---- */
+#editor .cm-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  font: 12px/1.6 var(--font-ui);
+  letter-spacing: .03em;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+#editor .cm-meta i { width: 3px; height: 3px; border-radius: 50%; background: var(--text-3); opacity: .7; }
+
+/* ---- 专注模式：其他段落变淡 ---- */
+#editor .cm-line, #editor .cm-meta, #editor .cm-table, #editor .cm-math-block, #editor .cm-image.is-block {
+  transition: opacity .3s ease;
+}
+#editor.is-focus-mode .cm-focused .cm-line:not(.cm-active-block),
+#editor.is-focus-mode .cm-focused .cm-meta,
+#editor.is-focus-mode .cm-focused .cm-table,
+#editor.is-focus-mode .cm-focused .cm-math-block,
+#editor.is-focus-mode .cm-focused .cm-image.is-block { opacity: .26; }

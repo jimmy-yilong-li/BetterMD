@@ -1,7 +1,7 @@
 // 标签、表格、路径这些小工具。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findTags, splitRow, parseTable, resolveTarget, libraryURL, countParagraphs } from '../src/helpers.js';
+import { findTags, splitRow, parseTable, resolveTarget, libraryURL, countParagraphs, countWords } from '../src/helpers.js';
 
 const names = line => findTags(line).map(t => t.name);
 
@@ -59,4 +59,12 @@ test('折叠后显示的段数', () => {
   assert.equal(countParagraphs('$$\nx\n\ny\n$$'), 1);
   assert.equal(countParagraphs('$$x$$\n\n- 列表\n- 列表'), 2);
   assert.equal(countParagraphs(''), 0);
+});
+
+test('字数：汉字一个一个算，英文按词算', () => {
+  assert.equal(countWords('傅里叶变换'), 5);
+  assert.equal(countWords('Fourier transform 很有用'), 5);
+  assert.equal(countWords('# 标题\n- [ ] 买菜 **bold**'), 5);
+  assert.equal(countWords("don't stop"), 2);
+  assert.equal(countWords(''), 0);
 });

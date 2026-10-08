@@ -4,38 +4,64 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 编辑区：所见即所得的 Markdown 编辑器。整个窗口只有一个编辑器实例，切换笔记时换内容。
+/// 顶部左边是所在文件夹，右边两组按钮：「Aa 格式、图片」｜「专注、⋯ 更多」。
 struct EditorView: View {
     @Environment(AppModel.self) private var model
+    @Environment(WindowState.self) private var window
     @State private var handle = EditorHandle()
+    @State private var showFormats = false
 
     var body: some View {
         let note = model.selectedNote
         MarkdownEditor(model: model, note: note, selectTitle: note != nil && note?.id == model.freshNoteID, handle: handle)
-            .background(Paper.color)
+            .background(Ink.paper.ignoresSafeArea())
             .overlay {
                 if note == nil {
-                    ContentUnavailableView("没有选中的笔记", systemImage: "note.text",
-                                           description: Text("在左边选一篇，或者按 ⌘N 新建"))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Paper.color)
-                }
-            }
-            .navigationTitle(note?.title ?? "BetterMD")
-            .navigationSubtitle(note.map(location) ?? "")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: chooseFiles) {
-                        Label("插入图片", systemImage: "photo")
+                    VStack(spacing: 8) {
+                        Image(systemName: "text.page").font(.system(size: 30, weight: .light)).opacity(0.5)
+                        Text("没有选中的笔记")
+                        Text("在左边选一篇，或者按 ⌘N 新建").font(.system(size: 12))
                     }
-                    .help("插入图片或文件，存进「附件」")
-                    .disabled(note == nil || note?.isTrashed == true)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Ink.text3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(PaperBackground(color: Ink.paper).ignoresSafeArea())
                 }
             }
-    }
-
-    private func location(_ note: Note) -> String {
-        let folder = note.folder.isEmpty ? "未分类" : note.folder.replacingOccurrences(of: "/", with: " / ")
-        return note.isTrashed ? "废纸篓（原来在 \(folder)）" : folder
+            .toolbar {
+                // 编辑区这一段工具栏：左边所在文件夹，弹性空白，右边两组按钮
+                ToolbarItem {
+                    if let note { Crumb(note: note) }
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarSpacer(.flexible)
+                ToolbarItemGroup {
+                    Button { showFormats.toggle() } label: {
+                        // 系统图标会跟着 App 的语言换成中文写法，这里要的是效果图里的「Aa」
+                        Image(systemName: "textformat").environment(\.locale, Locale(identifier: "en")).accessibilityLabel("格式")
+                    }
+                    .help("格式：标题、列表、表格、公式…")
+                    .disabled(note == nil || note?.isTrashed == true)
+                    .popover(isPresented: $showFormats, arrowEdge: .bottom) {
+                        FormatPanel { kind in
+                            showFormats = false
+                            if kind == "image" { chooseFiles() } else { handle.format(kind) }
+                        }
+                    }
+                    Button(action: chooseFiles) { Label("插入图片", systemImage: "photo") }
+                        .help("插入图片或文件，存进「附件」")
+                        .disabled(note == nil || note?.isTrashed == true)
+                }
+                ToolbarSpacer(.fixed)
+                ToolbarItemGroup {
+                    Button { window.focusMode.toggle() } label: {
+                        Label("专注", systemImage: window.focusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    }
+                    .help(window.focusMode ? "退出专注模式（Esc）" : "专注模式（⌘⇧D）")
+                    MoreMenu(note: note)
+                }
+            }
+            .onChange(of: window.focusMode, initial: true) { _, on in handle.setFocusMode(on) }
     }
 
     /// 从 Finder 选图片或文件，存进「附件/」，插在光标处。
@@ -54,5 +80,142 @@ struct EditorView: View {
             return EditorHandle.Attachment(link: link, name: url.lastPathComponent, image: image)
         }
         handle.insert(items)
+    }
+}
+
+/// 工具栏左边：这篇笔记在哪个文件夹；在废纸篓里时加一个标记。
+private struct Crumb: View {
+    let note: Note
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if note.folder.isEmpty { LooseSheetIcon(size: 14) } else { EnvelopeIcon(open: false, size: 14) }
+            Text(note.folder.isEmpty ? "未分类" : note.folder.replacingOccurrences(of: "/", with: " / "))
+                .lineLimit(1)
+                .truncationMode(.head)
+            if note.isTrashed {
+                Text("在废纸篓里")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Ink.text2)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 1)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Ink.field))
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(Ink.text3)
+        .padding(.horizontal, 6)
+    }
+}
+
+/// 格式面板（Aa）：常用格式一按就插入，底下提示也可以直接打 Markdown。
+private struct FormatPanel: View {
+    let pick: (String) -> Void
+
+    private let items: [(kind: String, label: String, glyph: Glyph)] = [
+        ("heading", "标题", .text("H", serif: true)), ("bold", "加粗", .text("B", serif: false)),
+        ("italic", "斜体", .italic("I")), ("link", "链接", .symbol("link")),
+        ("list", "列表", .symbol("list.bullet")), ("todo", "待办", .symbol("checkmark.square")),
+        ("quote", "引用", .symbol("text.quote")), ("rule", "分割线", .text("· · ·", serif: false)),
+        ("codeBlock", "代码块", .mono("{ }")), ("table", "表格", .symbol("tablecells")),
+        ("math", "公式", .text("∑", serif: true)), ("image", "图片", .symbol("photo")),
+    ]
+
+    enum Glyph {
+        case text(String, serif: Bool)
+        case italic(String)
+        case mono(String)
+        case symbol(String)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(74), spacing: 2), count: 4), spacing: 2) {
+                ForEach(items, id: \.kind) { item in
+                    FormatButton(label: item.label, glyph: item.glyph) { pick(item.kind) }
+                }
+            }
+            Divider()
+            Text("也可以直接打 Markdown：# 标题　**粗体**　- 列表　$公式$")
+                .font(.system(size: 11))
+                .foregroundStyle(Ink.text3)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 2)
+        }
+        .padding(8)
+    }
+}
+
+private struct FormatButton: View {
+    let label: String
+    let glyph: FormatPanel.Glyph
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                glyphView.frame(height: 20)
+                Text(label).font(.system(size: 11.5)).foregroundStyle(Ink.text2)
+            }
+            .frame(width: 74, height: 62)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hovering ? Ink.hover : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle())
+        .onHover { hovering = $0 }
+    }
+
+    @ViewBuilder private var glyphView: some View {
+        switch glyph {
+        case .text(let text, let serif):
+            Text(text).font(serif ? Ink.serif(18, bold: true) : .system(size: 17, weight: .bold)).foregroundStyle(Ink.text)
+        case .italic(let text):
+            Text(text).font(Ink.serif(19)).italic().foregroundStyle(Ink.text)
+        case .mono(let text):
+            Text(text).font(.system(size: 14, weight: .semibold, design: .monospaced)).foregroundStyle(Ink.text)
+        case .symbol(let name):
+            Image(systemName: name).font(.system(size: 16)).foregroundStyle(Ink.text)
+        }
+    }
+}
+
+/// 更多（⋯）：置顶、移动到、专注模式、在 Finder 中显示、键盘快捷键、移到废纸篓。
+private struct MoreMenu: View {
+    @Environment(AppModel.self) private var model
+    @Environment(WindowState.self) private var window
+    let note: Note?
+
+    var body: some View {
+        Menu {
+            if let note {
+                Text("修改于 \(NoteDate.label(for: note.modified)) · 创建于 \(NoteDate.label(for: note.created))")
+                Divider()
+                if note.isTrashed {
+                    Button("放回原处") { model.restore(note.id) }
+                } else {
+                    Button(note.isPinned ? "取消置顶" : "置顶") { model.togglePin(note.id) }
+                    Menu("移动到") {
+                        Button("未分类") { model.move(note.id, toFolder: "") }
+                        ForEach(model.folders, id: \.self) { folder in
+                            Button(folder.replacingOccurrences(of: "/", with: " / ")) { model.move(note.id, toFolder: folder) }
+                        }
+                    }
+                }
+                Button("在 Finder 中显示") {
+                    NSWorkspace.shared.activateFileViewerSelecting([model.store.url(for: note.path)])
+                }
+                Divider()
+            }
+            Button(window.focusMode ? "退出专注模式" : "专注模式") { window.focusMode.toggle() }
+            Button("键盘快捷键") { window.showShortcuts = true }
+            if let note, !note.isTrashed {
+                Divider()
+                Button("移到废纸篓", role: .destructive) { model.trash(note.id) }
+            }
+        } label: {
+            Label("更多", systemImage: "ellipsis")
+        }
+        .help("更多")
     }
 }

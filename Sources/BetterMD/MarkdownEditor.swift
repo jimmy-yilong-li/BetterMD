@@ -49,6 +49,9 @@ struct MarkdownEditor: NSViewRepresentable {
             var text: String
             var dir: String
             var readOnly: Bool
+            /// 标题下面那行小字：修改时间、所在文件夹
+            var modified: String
+            var folder: String
         }
 
         let model: AppModel
@@ -75,12 +78,15 @@ struct MarkdownEditor: NSViewRepresentable {
                 return
             }
             // 废纸篓里的笔记只读；图片的相对路径按原来的文件夹算（进废纸篓时正文没改）
-            let next = Shown(id: note.id, text: note.text, dir: note.folder, readOnly: note.isTrashed)
+            let folderLabel = note.folder.isEmpty ? "未分类" : note.folder.replacingOccurrences(of: "/", with: " / ")
+            let next = Shown(id: note.id, text: note.text, dir: note.folder, readOnly: note.isTrashed,
+                             modified: NoteDate.label(for: note.modified), folder: folderLabel)
             guard next != shown else { return }
             let opening = next.id != shown?.id
             shown = next
             let options: [String: Any] = [
                 "dir": next.dir, "readOnly": next.readOnly, "selectTitle": opening && selectTitle, "seq": lastSeq,
+                "meta": ["modified": next.modified, "folder": next.folder],
             ]
             webView.callAsyncJavaScript(
                 "window.bettermd.setDocument(id, text, options)",
@@ -124,6 +130,8 @@ struct MarkdownEditor: NSViewRepresentable {
                 open(url: body["url"] as? String, path: body["path"] as? String)
             case "tag":
                 if let name = body["name"] as? String { model.scope = .tag(name) }
+            case "exitFocus":
+                NotificationCenter.default.post(name: .toggleFocusMode, object: false)
             default:
                 break
             }
@@ -172,6 +180,18 @@ final class EditorHandle {
     }
 
     fileprivate(set) weak var webView: WKWebView?
+
+    /// 格式面板里的按钮：heading、bold、list、table、math……（见 editor/src/main.js 的 FORMATS）
+    func format(_ kind: String) {
+        guard let webView else { return }
+        webView.window?.makeFirstResponder(webView)
+        webView.callAsyncJavaScript("window.bettermd.format(kind)", arguments: ["kind": kind], in: nil, in: .page, completionHandler: nil)
+    }
+
+    /// 专注模式：编辑区里光标所在的那一段以外都变淡。
+    func setFocusMode(_ on: Bool) {
+        webView?.callAsyncJavaScript("window.bettermd?.setFocusMode(on)", arguments: ["on": on], in: nil, in: .page, completionHandler: nil)
+    }
 
     /// 在光标处插入附件：图片各占一行直接显示，别的文件写成链接。
     func insert(_ items: [Attachment]) {

@@ -50,7 +50,7 @@ public enum LibraryIndex {
             case .unfiled: return note.folder.isEmpty
             case .todo: return note.parsed.hasOpenTodo
             case .folder(let f): return note.folder == f || note.folder.hasPrefix(f + "/")
-            case .tag(let t): return note.parsed.tags.contains { $0 == t || $0.hasPrefix(t + "/") }
+            case .tag(let t): return hasTag(note, t)
             }
         }
     }
@@ -77,8 +77,51 @@ public enum LibraryIndex {
     }
 
     /// 列表里实际显示的笔记。
-    public static func visible(_ all: [Note], scope: Scope, query: String) -> [Note] {
-        search(notes(all, in: scope), query: query)
+    /// `tag`：只看带这个标签（或它的下级标签）的笔记，用于文件夹里那一排标签筛选。
+    /// `searchAll`：有搜索词时搜全部笔记（废纸篓除外），不管侧栏选的范围和标签筛选。
+    public static func visible(_ all: [Note], scope: Scope, query: String, tag: String? = nil, searchAll: Bool = false) -> [Note] {
+        if searchAll && !SearchText.terms(query).isEmpty {
+            return search(notes(all, in: .all), query: query)
+        }
+        var base = notes(all, in: scope)
+        if let tag { base = base.filter { hasTag($0, tag) } }
+        return search(base, query: query)
+    }
+
+    /// 文件夹里那一排标签筛选：这个范围里的笔记用到的一级标签，按名字排。
+    public static func chipTags(_ all: [Note], in scope: Scope) -> [String] {
+        var tags = Set<String>()
+        for note in notes(all, in: scope) {
+            for tag in note.parsed.tags { tags.insert(tag.split(separator: "/").first.map(String.init) ?? tag) }
+        }
+        return tags.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// 列表顶部显示的范围名字。
+    public static func scopeTitle(_ scope: Scope) -> String {
+        switch scope {
+        case .all: "我的笔记"
+        case .unfiled: "未分类"
+        case .todo: "待办"
+        case .trash: "废纸篓"
+        case .folder(let path): lastComponent(path)
+        case .tag(let tag): "#" + tag
+        }
+    }
+
+    /// 范围名字下面的一句说明；没有就是 nil。
+    public static func scopeDescription(_ scope: Scope) -> String? {
+        switch scope {
+        case .all, .trash: nil
+        case .unfiled: "没放进任何文件夹的笔记"
+        case .todo: "还有没勾掉的任务"
+        case .folder(let path): path.contains("/") ? path.replacingOccurrences(of: "/", with: " / ") : nil
+        case .tag: "所有文件夹"
+        }
+    }
+
+    static func hasTag(_ note: Note, _ tag: String) -> Bool {
+        note.parsed.tags.contains { $0 == tag || $0.hasPrefix(tag + "/") }
     }
 
     /// 把“工作”“工作/BetterMD”这样的路径列表变成树。

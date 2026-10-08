@@ -10,10 +10,26 @@ public final class AppModel {
     public private(set) var folders: [String] = []
     public private(set) var state = LibraryState()
     public var scope: Scope = .all {
-        didSet { if scope != oldValue { keepSelectionVisible() } }
+        didSet {
+            guard scope != oldValue else { return }
+            tagFilter = nil
+            keepSelectionVisible()
+        }
     }
     public var query = "" {
-        didSet { if query != oldValue { keepSelectionVisible() } }
+        didSet {
+            guard query != oldValue else { return }
+            if SearchText.terms(query).isEmpty { searchAll = false }
+            keepSelectionVisible()
+        }
+    }
+    /// 文件夹里那一排标签筛选选中的一级标签；换范围时清掉。只在文件夹视图里起作用。
+    public var tagFilter: String? {
+        didSet { if tagFilter != oldValue { keepSelectionVisible() } }
+    }
+    /// 有搜索词时搜全部笔记，而不是只搜侧栏选中的范围；搜索词清空时自动回到 false。
+    public var searchAll = false {
+        didSet { if searchAll != oldValue { keepSelectionVisible() } }
     }
     public private(set) var selectedID: Note.ID?
     /// 刚用 ⌘N 新建、还没离开过的笔记：编辑器打开它时直接选中标题，接着就能打字。
@@ -31,7 +47,16 @@ public final class AppModel {
         store = NoteStore(root: root)
     }
 
-    public var visibleNotes: [Note] { LibraryIndex.visible(notes, scope: scope, query: query) }
+    public var visibleNotes: [Note] {
+        var tag: String?
+        if case .folder = scope { tag = tagFilter }
+        return LibraryIndex.visible(notes, scope: scope, query: query, tag: tag, searchAll: searchAll)
+    }
+    /// 文件夹里那一排标签筛选；不在文件夹视图里时是空的。
+    public var chipTags: [String] {
+        if case .folder = scope { return LibraryIndex.chipTags(notes, in: scope) }
+        return []
+    }
     public var folderTree: [FolderNode] { LibraryIndex.folderTree(folders) }
     public var tagTree: [TagNode] { LibraryIndex.tagTree(notes) }
     public var selectedNote: Note? { selectedID.flatMap { id in notes.first { $0.id == id } } }

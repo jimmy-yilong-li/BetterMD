@@ -46,4 +46,15 @@ struct NoteTextTests {
         let text = "# t\n" + String(repeating: "字", count: 300)
         #expect(NoteText.preview(of: text, limit: 10).count == 10)
     }
+
+    @Test func previewDropsMarkdownAndMathSource() {
+        #expect(NoteText.preview(of: "# T\n\n是*信号处理*的基础，**粗体**和 `code`") == "是信号处理的基础，粗体和 code")
+        #expect(NoteText.preview(of: "# T\n\nNeuron $e^{i\\theta}$ 和 \\( y = x \\) 公式") == "Neuron e^{i\\theta} 和  y = x  公式")
+        #expect(NoteText.preview(of: "# T\n\n$$\nx^2\n$$\n\\[\ny\n\\]\n后面") == "后面")
+        #expect(NoteText.preview(of: "# T\n\n$$x^2$$\n后面") == "后面")
+        #expect(NoteText.preview(of: "# T\n\n| a | b |\n|---|:-:|\n| 1 | 2 |") == "a b 1 2")
+        #expect(NoteText.preview(of: "# T\n\nsnake_case_name 和 _强调_") == "snake_case_name 和 强调")
+        #expect(NoteText.preview(of: "# T\n\n花了 $5 和 $6，转义的 \\$7") == "花了 $5 和 $6，转义的 $7")
+        #expect(NoteText.preview(of: "# T\n\n---\n文字") == "文字")
+    }
 }

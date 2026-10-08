@@ -117,3 +117,12 @@ export function countParagraphs(text) {
   }
   return count;
 }
+
+const CJK = /[㐀-䶿一-鿿豈-﫿]/g;
+
+/** 字数：汉字一个算一个字，英文和数字按词算；Markdown 符号不算。 */
+export function countWords(text) {
+  const cjk = text.match(CJK)?.length ?? 0;
+  const words = text.replace(CJK, ' ').match(/[A-Za-z0-9]+(?:['’][A-Za-z]+)*/g)?.length ?? 0;
+  return cjk + words;
+}

@@ -1,25 +1,40 @@
 import AppKit
 import BetterMDCore
+import SwiftUI
 import WebKit
 
 /// 开发用：启动参数 `-snapshotPath /某处/图.png` 会在窗口出现两秒后，把整个窗口画成图片存下来，
 /// 并在旁边写一份 `.txt`：每个列表实际有几行、AppModel 里有哪些笔记、编辑器网页里渲染出了什么。
 /// 编辑器（WKWebView）画不进窗口图，另存成 `图-editor.png`。然后退出。
 /// 可选参数：`-snapshotNote 标题里的字` 先选中这篇笔记；`-snapshotAppearance dark` 用深色外观；
-/// `-snapshotSelect "起|止"` 在编辑器里从“起”选到“止”（看选区的样子）。
+/// `-snapshotSelect "起|止"` 在编辑器里从“起”选到“止”（看选区的样子）；`-snapshotScope folder:工作` 侧栏范围；
+/// `-snapshotTag 会议` 标签筛选；`-snapshotQuery 词` 搜索；`-snapshotFocus YES` 专注模式。
 /// 没有屏幕录制权限时，用它检查界面。正常启动不受影响。
 enum DebugSnapshot {
     @MainActor
     static func runIfRequested(model: AppModel) async {
         let defaults = UserDefaults.standard
+        if let gallery = defaults.string(forKey: "snapshotGallery"), !gallery.isEmpty {
+            if let wanted = defaults.string(forKey: "snapshotScope") { model.scope = scope(from: wanted) }
+            renderGallery(to: URL(fileURLWithPath: (gallery as NSString).expandingTildeInPath), model: model)
+            NSApplication.shared.terminate(nil)
+            return
+        }
         guard let path = defaults.string(forKey: "snapshotPath"), !path.isEmpty else { return }
         if defaults.string(forKey: "snapshotAppearance") == "dark" {
             NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
         }
+        if let wanted = defaults.string(forKey: "snapshotScope") { model.scope = scope(from: wanted) }
         if let wanted = defaults.string(forKey: "snapshotNote"),
            let note = model.notes.first(where: { $0.title.contains(wanted) }) {
-            model.scope = .all
+            if !model.visibleNotes.contains(where: { $0.id == note.id }) { model.scope = .all }
             model.select(note.id)
+        }
+        if let filter = defaults.string(forKey: "snapshotTag") { model.tagFilter = filter }
+        if let query = defaults.string(forKey: "snapshotQuery") { model.query = query }
+        if defaults.bool(forKey: "snapshotFocus") {
+            try? await Task.sleep(for: .seconds(1.5))
+            NotificationCenter.default.post(name: .toggleFocusMode, object: true)
         }
         try? await Task.sleep(for: .seconds(2.5))
         defer { NSApplication.shared.terminate(nil) }
@@ -91,6 +106,10 @@ enum DebugSnapshot {
             if let table = view as? NSTableView {
                 lines.append("\(type(of: table)) rows=\(table.numberOfRows) frame=\(table.frame.integral)")
             }
+            if let split = view as? NSSplitView {
+                let widths = split.arrangedSubviews.map { "\(Int($0.frame.width))\($0.isHidden ? "(隐藏)" : "")" }
+                lines.append("分栏宽度=\(widths.joined(separator: " | "))")
+            }
             view.subviews.forEach(walk)
         }
         walk(root)
@@ -100,6 +119,45 @@ enum DebugSnapshot {
         lines.append("tags=\(model.tagTree.map(\.path))")
         lines.append("visible=\(model.visibleNotes.map(\.title))")
         return lines.joined(separator: "\n")
+    }
+
+    /// `-snapshotGallery 图.png`：把图标和界面小部件离屏画成一张样张（浅色、深色各一行），然后退出。
+    /// 纯 SwiftUI 画的东西都能这样核对，不受窗口截图的限制。
+    @MainActor
+    private static func renderGallery(to target: URL, model: AppModel) {
+        let sheet = HStack(alignment: .top, spacing: 0) {
+            ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(spacing: 0) {
+                        SidebarTree(expanded: Set(model.folders.map { "folder:" + $0 }))
+                        Spacer(minLength: 0)
+                        SidebarFooter()
+                    }
+                    .frame(width: 236, height: 560)
+                    .background(scheme == .dark ? Color(white: 0.16) : Color(white: 0.95))
+                    DebugGallery().frame(height: 560, alignment: .top).background(Ink.listPaper)
+                }
+                .environment(model)
+                .environment(\.colorScheme, scheme)
+            }
+        }
+        let renderer = ImageRenderer(content: sheet)
+        renderer.scale = 2
+        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: target)
+    }
+
+    /// `-snapshotScope` 的写法：all、unfiled、todo、trash、folder:路径、tag:路径。
+    private static func scope(from text: String) -> Scope {
+        if text.hasPrefix("folder:") { return .folder(String(text.dropFirst(7))) }
+        if text.hasPrefix("tag:") { return .tag(String(text.dropFirst(4))) }
+        switch text {
+        case "unfiled": return .unfiled
+        case "todo": return .todo
+        case "trash": return .trash
+        default: return .all
+        }
     }
 
     /// 菜单里所有快捷键（菜单的快捷键先于编辑器网页拿到按键，用来查冲突）。
@@ -133,5 +191,45 @@ enum DebugSnapshot {
         layer.render(in: context)
         guard let image = context.makeImage() else { return nil }
         return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+    }
+}
+
+
+/// 样张：图标放大看细节，也看实际大小；再加几行列表。
+private struct DebugGallery: View {
+    private func sample(_ title: String, _ body: String, pinned: Bool = false) -> Note {
+        Note(path: title + ".md", text: "# \(title)\n\n\(body)", created: .now, modified: .now, isPinned: pinned)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 24) {
+                EnvelopeIcon(open: false, size: 72)
+                EnvelopeIcon(open: true, size: 72)
+                LooseSheetIcon(size: 72)
+                NotebookIcon(size: 64)
+                RibbonView().scaleEffect(3, anchor: .topLeading).frame(width: 40, height: 60, alignment: .topLeading)
+            }
+            HStack(spacing: 14) {
+                EnvelopeIcon(open: false)
+                EnvelopeIcon(open: true)
+                LooseSheetIcon()
+                NotebookIcon()
+                RibbonView()
+                Text("宋体标题 Iowan Title").font(Ink.serif(15, bold: true)).foregroundStyle(Ink.text)
+                Text("正文二级色").font(.system(size: 12.5)).foregroundStyle(Ink.text2)
+            }
+            VStack(spacing: 0) {
+                NoteRow(note: sample("置顶的笔记", "置顶以后右上角挂一条书签丝带，排在最前。", pinned: true),
+                        location: "工作 / BetterMD", terms: [], selected: false, separator: false)
+                NoteRow(note: sample("选中的笔记", "选中的笔记像从一叠纸里抽出来的一张卡片。"),
+                        location: nil, terms: [], selected: true, separator: false)
+                NoteRow(note: sample("搜索周会", "命中的字加朱砂色底：周会在周一上午。"),
+                        location: "未分类", terms: ["周会"], selected: false, separator: false)
+            }
+            .frame(width: 320)
+        }
+        .padding(24)
+        .frame(width: 560, alignment: .leading)
     }
 }

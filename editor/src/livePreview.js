@@ -5,9 +5,9 @@ import { EditorView, Decoration, showTooltip } from '@codemirror/view';
 import { syntaxTree, foldedRanges, foldable } from '@codemirror/language';
 import { texOf, isDisplayMath } from './math.js';
 import { texHTML } from './render.js';
-import { findTags, resolveTarget, libraryURL } from './helpers.js';
+import { findTags, resolveTarget, libraryURL, countWords } from './helpers.js';
 import {
-  MathWidget, MathPreviewWidget, ImageWidget, ListMarkWidget, RuleWidget, CodeInfoWidget, TableWidget,
+  MathWidget, MathPreviewWidget, ImageWidget, ListMarkWidget, RuleWidget, CodeInfoWidget, TableWidget, MetaWidget,
 } from './widgets.js';
 
 // ---- 编辑器有没有焦点：没焦点时什么都不算“正在编辑”，整篇都显示排版效果 ----
@@ -31,6 +31,26 @@ export const dirState = StateField.define({
   },
 });
 
+// ---- 标题下面那行小字的内容（修改时间、所在文件夹），由 App 给 ----
+export const setMeta = StateEffect.define();
+export const metaState = StateField.define({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setMeta)) value = e.value;
+    return value;
+  },
+});
+
+// ---- 专注模式：光标所在的那一段保持清楚，其他段落变淡 ----
+export const setFocusMode = StateEffect.define();
+export const focusModeState = StateField.define({
+  create: () => false,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setFocusMode)) value = e.value;
+    return value;
+  },
+});
+
 const hide = Decoration.replace({});
 // 列表符号区的宽度（em）：每层缩进，以及圆点、序号、复选框各自占的宽度
 const LIST_STEP = 1.5;
@@ -47,9 +67,9 @@ const NO_TAGS = new Set([
 
 function build(state) {
   const doc = state.doc;
-  const focused = state.field(focusState);
+  const focused = state.field(focusState, false) ?? false;
   const ranges = state.selection.ranges;
-  const dir = state.field(dirState);
+  const dir = state.field(dirState, false) ?? '';
   const folded = foldedRanges(state);
   const out = [];
   const replaced = []; // 整段替换掉的范围，里面不再加别的装饰
@@ -305,6 +325,26 @@ function build(state) {
     },
   });
 
+  // 标题下面一行小字：修改时间 · 所在文件夹 · 字数
+  const meta = state.field(metaState, false) ?? null;
+  if (meta && doc.lines > 0 && /^#{1,6}\s/.test(doc.line(1).text)) {
+    const words = countWords(doc.sliceString(doc.line(1).to));
+    const parts = [meta.modified, meta.folder, `${words.toLocaleString('en-US')} 字`].filter(Boolean);
+    add(Decoration.widget({ widget: new MetaWidget(parts), block: true, side: 1 }), doc.line(1).to);
+  }
+
+  // 专注模式：光标所在的那一块（段落、列表、代码块……）不变淡
+  if (state.field(focusModeState, false) && focused) {
+    const head = state.selection.main.head;
+    let block = null;
+    for (let n = syntaxTree(state).resolveInner(head, -1); n && n.parent; n = n.parent) {
+      if (n.parent.name === 'Document') { block = n; break; }
+    }
+    const from = block && block.from <= head && block.to >= head ? block.from : doc.lineAt(head).from;
+    const to = block && block.from <= head && block.to >= head ? block.to : doc.lineAt(head).to;
+    eachLine(from, to, line => add(lineClass('cm-active-block'), line.from));
+  }
+
   // 标签：印章式的小框
   const tree = syntaxTree(state);
   for (let i = 1; i <= doc.lines; i++) {
@@ -343,8 +383,10 @@ export const livePreview = StateField.define({
   update(deco, tr) {
     const changed = tr.docChanged || tr.selection
       || syntaxTree(tr.state) !== syntaxTree(tr.startState)
-      || tr.state.field(focusState) !== tr.startState.field(focusState)
-      || tr.state.field(dirState) !== tr.startState.field(dirState)
+      || tr.state.field(focusState, false) !== tr.startState.field(focusState, false)
+      || tr.state.field(dirState, false) !== tr.startState.field(dirState, false)
+      || tr.state.field(metaState, false) !== tr.startState.field(metaState, false)
+      || tr.state.field(focusModeState, false) !== tr.startState.field(focusModeState, false)
       || foldedRanges(tr.state) !== foldedRanges(tr.startState);
     return changed ? safeBuild(tr.state, deco.map(tr.changes)) : deco;
   },
@@ -353,7 +395,7 @@ export const livePreview = StateField.define({
 
 // ---- 光标在行内公式里时，下面浮出实时排版结果 ----
 function mathTip(state) {
-  if (!state.field(focusState)) return null;
+  if (!state.field(focusState, false)) return null;
   const { head, empty } = state.selection.main;
   if (!empty) return null;
   for (let n = syntaxTree(state).resolveInner(head, -1); n; n = n.parent) {
@@ -387,7 +429,7 @@ function safeTip(state) {
 export const mathTooltip = StateField.define({
   create: safeTip,
   update(tip, tr) {
-    if (!tr.docChanged && !tr.selection && tr.state.field(focusState) === tr.startState.field(focusState)) return tip;
+    if (!tr.docChanged && !tr.selection && tr.state.field(focusState, false) === tr.startState.field(focusState, false)) return tip;
     return safeTip(tr.state);
   },
   provide: field => showTooltip.from(field),
