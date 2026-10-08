@@ -12,8 +12,17 @@ public enum SearchText {
     }
 
     /// 每个关键词都出现在 `foldedText` 里才算命中。`foldedText` 必须已经用 `fold` 处理过。
+    /// 按 UTF-8 字节找（memmem），比 String.contains 快几十倍；两边都折叠过，字节相同就是字相同。
     public static func matches(_ foldedText: String, terms: [String]) -> Bool {
-        terms.allSatisfy { foldedText.contains($0) }
+        var text = foldedText
+        return text.withUTF8 { hay in
+            terms.allSatisfy { term in
+                var needle = term
+                return needle.withUTF8 { n in
+                    n.isEmpty || memmem(hay.baseAddress, hay.count, n.baseAddress, n.count) != nil
+                }
+            }
+        }
     }
 
 }

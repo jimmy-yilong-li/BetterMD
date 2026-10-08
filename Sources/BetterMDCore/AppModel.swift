@@ -78,17 +78,43 @@ public final class AppModel {
     }
 
     @ObservationIgnored private var visibleCache: (key: VisibleKey, notes: [Note])?
-    @ObservationIgnored private var tagTreeCache: (version: Int, tree: [TagNode])?
-    /// 文件夹里那一排标签筛选；不在文件夹视图里时是空的。
+    @ObservationIgnored private var tagTreeCache: (structure: Int, tree: [TagNode])?
+    /// 文件夹里那一排标签筛选；不在文件夹视图里时是空的。只在标签或路径变了时重算。
     public var chipTags: [String] {
-        if case .folder = scope { return LibraryIndex.chipTags(notes, in: scope) }
-        return []
+        guard case .folder = scope else { return [] }
+        let key = ChipKey(scope: scope, structure: structureSignature)
+        if let cached = chipCache, cached.key == key { return cached.tags }
+        let tags = LibraryIndex.chipTags(notes, in: scope)
+        chipCache = (key, tags)
+        return tags
+    }
+
+    private struct ChipKey: Equatable {
+        var scope: Scope
+        var structure: Int
+    }
+
+    @ObservationIgnored private var chipCache: (key: ChipKey, tags: [String])?
+    @ObservationIgnored private var signatureCache: (version: Int, value: Int)?
+
+    /// 所有笔记的路径和标签算出的指纹：只改正文、标签没变时不变，标签树和标签筛选就不用重算。
+    private var structureSignature: Int {
+        if let cached = signatureCache, cached.version == notesVersion { return cached.value }
+        var hasher = Hasher()
+        for note in notes {
+            hasher.combine(note.path)
+            hasher.combine(note.parsed.tags)
+        }
+        let value = hasher.finalize()
+        signatureCache = (notesVersion, value)
+        return value
     }
     public var folderTree: [FolderNode] { LibraryIndex.folderTree(folders) }
     public var tagTree: [TagNode] {
-        if let cached = tagTreeCache, cached.version == notesVersion { return cached.tree }
+        let structure = structureSignature
+        if let cached = tagTreeCache, cached.structure == structure { return cached.tree }
         let tree = LibraryIndex.tagTree(notes)
-        tagTreeCache = (notesVersion, tree)
+        tagTreeCache = (structure, tree)
         return tree
     }
     public var selectedNote: Note? { selectedID.flatMap { id in notes.first { $0.id == id } } }

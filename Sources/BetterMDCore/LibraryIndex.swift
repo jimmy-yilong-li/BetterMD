@@ -125,16 +125,22 @@ public enum LibraryIndex {
 
     /// 把“工作”“工作/BetterMD”这样的路径列表变成树。
     public static func folderTree(_ folders: [String]) -> [FolderNode] {
+        let children = groupByParent(folders)
         func build(_ parent: String) -> [FolderNode] {
-            folders
-                .filter { Note.parentFolder(of: $0) == parent }
-                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-                .map { path in
-                    let kids = build(path)
-                    return FolderNode(path: path, name: lastComponent(path), children: kids.isEmpty ? nil : kids)
-                }
+            (children[parent] ?? []).map { path in
+                let kids = build(path)
+                return FolderNode(path: path, name: lastComponent(path), children: kids.isEmpty ? nil : kids)
+            }
         }
         return build("")
+    }
+
+    /// 按上级分组，每组按名字排好（建树时不用两两比较）。
+    static func groupByParent(_ paths: some Sequence<String>) -> [String: [String]] {
+        var groups: [String: [String]] = [:]
+        for path in paths { groups[Note.parentFolder(of: path), default: []].append(path) }
+        for key in groups.keys { groups[key]?.sort { $0.localizedStandardCompare($1) == .orderedAscending } }
+        return groups
     }
 
     /// 所有没在废纸篓里的笔记用到的标签，连同它们的上级（“会议/周会”会带出“会议”）。
@@ -149,14 +155,12 @@ public enum LibraryIndex {
                 }
             }
         }
+        let children = groupByParent(all)
         func build(_ parent: String) -> [TagNode] {
-            all
-                .filter { Note.parentFolder(of: $0) == parent }
-                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-                .map { path in
-                    let kids = build(path)
-                    return TagNode(path: path, name: lastComponent(path), children: kids.isEmpty ? nil : kids)
-                }
+            (children[parent] ?? []).map { path in
+                let kids = build(path)
+                return TagNode(path: path, name: lastComponent(path), children: kids.isEmpty ? nil : kids)
+            }
         }
         return build("")
     }

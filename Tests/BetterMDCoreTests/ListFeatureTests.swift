@@ -127,3 +127,33 @@ struct VisibleCacheTests {
         #expect(time < .milliseconds(150), "用了 \(time)")
     }
 }
+
+@MainActor
+struct KeystrokeCostTests {
+    /// 3000 篇、几百个标签的库里打一个字：模型更新加上界面要读的列表、标签树、标签筛选。
+    @Test func oneKeystrokeIsCheap() throws {
+        let root = try TempDir.make()
+        let model = AppModel(root: root)
+        model.saveDelay = .seconds(60)
+        model.load()
+        for i in 0..<3000 {
+            let tags = "#组\(i % 20)/子\(i % 20)/孙\(i % 3) #主题\(i % 7)"
+            try root.write("# 笔记 \(i)\n\(tags)\n\n" + String(repeating: "正文 text \(i) ", count: 50), to: "文件夹\(i % 30)/笔记 \(i).md")
+        }
+        model.load()
+        model.scope = .folder("文件夹3")
+        let note = try #require(model.visibleNotes.first)
+        model.select(note.id)
+        _ = (model.visibleNotes, model.tagTree, model.chipTags)
+        let clock = ContinuousClock()
+        var text = note.text
+        let time = clock.measure {
+            for _ in 0..<10 {
+                text += "字"
+                model.updateText(text, for: note.id)
+                _ = (model.visibleNotes, model.tagTree, model.chipTags, model.folderTree)
+            }
+        }
+        #expect(time / 10 < .milliseconds(15), "每个字 \(time / 10)")
+    }
+}
