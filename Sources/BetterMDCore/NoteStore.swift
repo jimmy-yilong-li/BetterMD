@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 /// 读写「我的笔记」目录。App 里只有这里直接碰文件。
 public struct NoteStore: Sendable {
     public let root: URL
+    /// 文件只在 iCloud 上、还没下载到这台 Mac 时：请 iCloud 下载，返回 true（这次先不读）。测试里换成假的。
+    var downloadIfCloudOnly: @Sendable (URL) -> Bool = { NoteStore.requestDownloadIfDataless($0) }
 
     public init(root: URL) {
         self.root = root
@@ -14,6 +16,8 @@ public struct NoteStore: Sendable {
         public var notes: [Note]
         public var folders: [String]
         public var state: LibraryState
+        /// 只在 iCloud 上、这次没读的笔记有几篇（已经请 iCloud 下载，下好了再读）
+        public var downloading = 0
     }
 
     public func url(for path: String) -> URL {
@@ -29,6 +33,8 @@ public struct NoteStore: Sendable {
 
     /// 扫描全部 .md 笔记（包括废纸篓里的）和全部文件夹（不含「附件」「废纸篓」和隐藏目录）。
     /// 读不出来的文件（既不是 UTF-8 也不是 GB18030）直接跳过，不会被改动。
+    /// 只在 iCloud 上的笔记（iCloud 为了省空间只在本机留了个空壳）这次也跳过：现在读要等下载，会卡住界面。
+    /// 先请 iCloud 下载，下好了再读；跳过了几篇记在 `downloading` 里。
     ///
     /// `previous`：上一次读到的笔记（按路径）。同一路径的笔记沿用原来的 id；文件修改时间也没变的，
     /// 连正文和解析结果一起沿用，不再读文件、不再解析——回到 App 时重新读取就几乎不花时间。
@@ -44,6 +50,7 @@ public struct NoteStore: Sendable {
         }
         var notes: [Note] = []
         var folders: [String] = []
+        var downloading = 0
         var fresh: [(path: String, text: String, created: Date, modified: Date)] = []
         for case let url as URL in walker {
             guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
@@ -69,6 +76,10 @@ public struct NoteStore: Sendable {
                                   originalFolder: state.trashOrigins[path]))
                 continue
             }
+            if downloadIfCloudOnly(url) {
+                downloading += 1
+                continue
+            }
             guard let text = readText(url) else { continue }
             fresh.append((path, text, created, modified))
         }
@@ -86,7 +97,21 @@ public struct NoteStore: Sendable {
                               isPinned: state.pinned.contains(entry.path), originalFolder: state.trashOrigins[entry.path]))
         }
         folders.sort { $0.localizedStandardCompare($1) == .orderedAscending }
-        return Snapshot(notes: notes, folders: folders, state: state)
+        return Snapshot(notes: notes, folders: folders, state: state, downloading: downloading)
+    }
+
+    /// 只在云上的文件请 iCloud 下载，返回 true。请不动的（比如不归 iCloud 管的网盘）返回 false，
+    /// 当普通文件读：读的时候系统会去下载，只是要等。
+    static func requestDownloadIfDataless(_ url: URL) -> Bool {
+        guard isDataless(url) else { return false }
+        return (try? FileManager.default.startDownloadingUbiquitousItem(at: url)) != nil
+    }
+
+    /// 文件内容是不是只在云上（iCloud 的“优化 Mac 储存空间”会把不常用的文件只留一个空壳，读的时候才下载）。
+    /// 只看文件的标志位，不会触发下载。
+    static func isDataless(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0 && info.st_flags & UInt32(SF_DATALESS) != 0
     }
 
     /// 原子写入笔记全文，保留文件原来的创建时间；返回新的修改时间。

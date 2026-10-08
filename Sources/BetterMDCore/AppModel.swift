@@ -53,9 +53,16 @@ public final class AppModel {
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     /// 打开笔记时的标题；离开时标题变了才改文件名。
     @ObservationIgnored private var titleWhenOpened: [Note.ID: String] = [:]
+    /// 有笔记还在从 iCloud 下载时，过一会儿再读一遍；每等一次，下次多等一倍（最长一分钟），没网时不空转。
+    @ObservationIgnored private var downloadCheck: Task<Void, Never>?
+    @ObservationIgnored var downloadWait: Duration = .seconds(1)
 
-    public init(root: URL) {
-        store = NoteStore(root: root)
+    public convenience init(root: URL) {
+        self.init(store: NoteStore(root: root))
+    }
+
+    init(store: NoteStore) {
+        self.store = store
     }
 
     /// 列表里显示的笔记。一次界面刷新会读好几次，按输入缓存：笔记、范围、搜索词、筛选任何一样变了才重算。
@@ -127,7 +134,8 @@ public final class AppModel {
             try store.prepare()
             let previous = Dictionary(notes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
             var snapshot = try store.load(reusing: previous)
-            if snapshot.notes.isEmpty && !snapshot.state.welcomed {
+            // 笔记还在从 iCloud 下载时，库不是空的，不能放欢迎笔记
+            if snapshot.notes.isEmpty && snapshot.downloading == 0 && !snapshot.state.welcomed {
                 snapshot.notes.append(try store.createNote(text: Self.welcomeText, inFolder: ""))
                 snapshot.state.welcomed = true
                 try store.saveState(snapshot.state)
@@ -146,8 +154,28 @@ public final class AppModel {
             folders = snapshot.folders
             state = snapshot.state
             keepSelectionVisible()
+            waitForDownloads(snapshot.downloading)
         } catch {
             lastError = "读取笔记失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 有笔记还在从 iCloud 下载：过一会儿再读一遍，下好的就出现在列表里。
+    private func waitForDownloads(_ count: Int) {
+        guard count > 0 else {
+            downloadCheck?.cancel()
+            downloadCheck = nil
+            downloadWait = .seconds(1)
+            return
+        }
+        guard downloadCheck == nil else { return }
+        let wait = downloadWait
+        downloadWait = min(wait * 2, .seconds(60))
+        downloadCheck = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard !Task.isCancelled, let self else { return }
+            self.downloadCheck = nil
+            self.load()
         }
     }
 

@@ -1,6 +1,6 @@
 # BetterMD
 
-Bear 式的 Markdown 笔记 App，只做 macOS，笔记同步到我们自己的私有云。沟通和文档都用中文。
+Bear 式的 Markdown 笔记 App，只做 macOS，笔记放在 iCloud 云盘里同步。沟通和文档都用中文。
 
 产品名写作 **BetterMD**（B、M、D 大写），文档、界面和代码里都这样写。
 

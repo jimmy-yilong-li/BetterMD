@@ -12,23 +12,38 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
     static let pageURL = URL(string: "bettermd://editor/index.html")!
 
     private let library: @MainActor () -> NoteStore?
+    /// 还在读文件的请求。网页不要了（stop）就从这里拿掉，读完以后不再回给它。
+    private var running: [ObjectIdentifier: any WKURLSchemeTask] = [:]
 
     init(library: @escaping @MainActor () -> NoteStore?) {
         self.library = library
     }
 
     func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
-        guard let url = task.request.url, let file = file(for: url), let data = try? Data(contentsOf: file) else {
+        guard let url = task.request.url, let file = file(for: url) else {
             task.didFailWithError(URLError(.fileDoesNotExist))
             return
         }
-        let headers = ["Content-Type": Self.mimeType(of: file), "Content-Length": String(data.count), "Cache-Control": "no-store"]
-        task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
-        task.didReceive(data)
-        task.didFinish()
+        let id = ObjectIdentifier(task)
+        running[id] = task
+        // 在后台读：图片可能只在 iCloud 上，读的时候要等下载，不能卡住界面
+        Task {
+            let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: file) }.value
+            guard let task = running.removeValue(forKey: id) else { return }
+            guard let data else {
+                task.didFailWithError(URLError(.fileDoesNotExist))
+                return
+            }
+            let headers = ["Content-Type": Self.mimeType(of: file), "Content-Length": String(data.count), "Cache-Control": "no-store"]
+            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+            task.didReceive(data)
+            task.didFinish()
+        }
     }
 
-    func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
+    func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {
+        running.removeValue(forKey: ObjectIdentifier(task))
+    }
 
     private func file(for url: URL) -> URL? {
         let path = url.path(percentEncoded: false).trimmingCharacters(in: CharacterSet(charactersIn: "/"))

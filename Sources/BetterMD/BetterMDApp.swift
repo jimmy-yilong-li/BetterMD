@@ -4,11 +4,16 @@ import SwiftUI
 
 @main
 struct BetterMDApp: App {
-    @State private var model = AppModel(root: LibraryLocation.current)
+    @State private var model: AppModel
 
     init() {
         // 用 swift run 直接启动时也要像普通 App 一样出现在程序坞里。
         NSApplication.shared.setActivationPolicy(.regular)
+        // 先搬家（如果需要），再决定读哪个目录
+        let notice = LibraryLocation.moveLegacyLibraryToICloudIfNeeded()
+        let model = AppModel(root: LibraryLocation.current)
+        model.lastError = notice
+        _model = State(initialValue: model)
     }
 
     var body: some Scene {

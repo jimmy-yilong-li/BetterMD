@@ -35,6 +35,11 @@ struct EditorView: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarSpacer(.flexible)
+                ToolbarItem {
+                    // 笔记库在 iCloud 里才显示云图标
+                    if let note, LibraryLocation.isInICloud(model.store.root) { CloudBadge(note: note) }
+                }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItemGroup {
                     Button { showFormats.toggle() } label: {
                         // 系统图标会跟着 App 的语言换成中文写法，这里要的是效果图里的「Aa」
@@ -109,6 +114,57 @@ private struct Crumb: View {
         .font(.system(size: 12))
         .foregroundStyle(Ink.text3)
         .padding(.horizontal, 6)
+    }
+}
+
+/// 工具栏右边的云图标：这篇笔记有没有传到 iCloud。上传是 iCloud 自己做的，这里每隔几秒读一次系统记下的状态。
+private struct CloudBadge: View {
+    @Environment(AppModel.self) private var model
+    let note: Note
+    /// 还没读到时是 nil
+    @State private var status: CloudStatus?
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 13))
+            .foregroundStyle(isFailed ? Ink.accent : Ink.text3)
+            .contentTransition(.symbolEffect(.replace))
+            .padding(.horizontal, 4)
+            .help(explanation)
+            .accessibilityLabel(explanation)
+            .task(id: model.store.url(for: note.path)) {
+                let file = model.store.url(for: note.path)
+                while !Task.isCancelled {
+                    let now = await Task.detached(priority: .utility) { CloudStatus.of(file) }.value
+                    guard !Task.isCancelled else { return }
+                    status = now
+                    // 传完了就读得慢一点；改了正文以后几秒内会看到它变成“正在上传”
+                    try? await Task.sleep(for: now == .uploaded ? .seconds(4) : .seconds(1.5))
+                }
+            }
+    }
+
+    private var isFailed: Bool {
+        if case .failed = status { return true }
+        return false
+    }
+
+    private var symbol: String {
+        switch status {
+        case .uploaded: "checkmark.icloud"
+        case .uploading, .local: "icloud.and.arrow.up"
+        case .failed: "exclamationmark.icloud"
+        case nil: "icloud"
+        }
+    }
+
+    private var explanation: String {
+        switch status {
+        case .uploaded: "已存到 iCloud 云盘（修改于 \(NoteDate.label(for: note.modified))）"
+        case .uploading, .local: "正在上传到 iCloud 云盘…"
+        case .failed(let reason): "没能上传到 iCloud 云盘：\(reason)"
+        case nil: "iCloud 云盘"
+        }
     }
 }
 
