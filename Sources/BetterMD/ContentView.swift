@@ -65,7 +65,7 @@ struct ContentView: View {
             model.flushPendingSave()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            model.flushPendingSave()
+            model.finishAll()
         }
     }
 

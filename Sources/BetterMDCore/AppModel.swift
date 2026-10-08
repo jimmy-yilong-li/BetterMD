@@ -17,6 +17,7 @@ public final class AppModel {
         didSet {
             guard scope != oldValue else { return }
             tagFilter = nil
+            searchAll = false
             keepSelectionVisible()
         }
     }
@@ -43,6 +44,12 @@ public final class AppModel {
     public var saveDelay: Duration = .milliseconds(600)
 
     @ObservationIgnored private var dirty: Set<Note.ID> = []
+    /// 从什么时候起有没保存的改动。一直不停地打字时，最多隔 maxSaveDelay 也要存一次。
+    @ObservationIgnored private var dirtySince: ContinuousClock.Instant?
+    /// 连续打字时最长多久存一次。
+    public var maxSaveDelay: Duration = .seconds(3)
+    /// 离开过的笔记打开时的标题。输入法刚选完的字可能在离开之后才到，那时还要按标题补改文件名。
+    @ObservationIgnored private var leftTitles: [Note.ID: String] = [:]
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     /// 打开笔记时的标题；离开时标题变了才改文件名。
     @ObservationIgnored private var titleWhenOpened: [Note.ID: String] = [:]
@@ -54,7 +61,7 @@ public final class AppModel {
     /// 列表里显示的笔记。一次界面刷新会读好几次，按输入缓存：笔记、范围、搜索词、筛选任何一样变了才重算。
     public var visibleNotes: [Note] {
         var tag: String?
-        if case .folder = scope { tag = tagFilter }
+        if case .folder = scope, let filter = tagFilter, chipTags.contains(filter) { tag = filter }
         let key = VisibleKey(notes: notesVersion, scope: scope, query: query, tag: tag, searchAll: searchAll)
         if let cached = visibleCache, cached.key == key { return cached.notes }
         let result = LibraryIndex.visible(notes, scope: scope, query: query, tag: tag, searchAll: searchAll)
@@ -99,7 +106,17 @@ public final class AppModel {
                 snapshot.state.welcomed = true
                 try store.saveState(snapshot.state)
             }
-            notes = snapshot.notes
+            // 还没存下的改动（比如保存失败了）不能被磁盘上的旧版本盖掉
+            var loaded = snapshot.notes
+            for note in notes where dirty.contains(note.id) {
+                if let k = loaded.firstIndex(where: { $0.id == note.id }) {
+                    loaded[k].text = note.text
+                    loaded[k].modified = note.modified
+                } else {
+                    loaded.append(note) // 文件在外面被删了：留着，下次保存时重新建
+                }
+            }
+            notes = loaded
             folders = snapshot.folders
             state = snapshot.state
             keepSelectionVisible()
@@ -116,7 +133,7 @@ public final class AppModel {
 
     /// 换一个目录当「我的笔记」。
     public func switchLibrary(to root: URL) {
-        flushPendingSave()
+        finishAll()
         store = NoteStore(root: root)
         notes = []
         folders = []
@@ -124,7 +141,17 @@ public final class AppModel {
         selectedID = nil
         freshNoteID = nil
         titleWhenOpened = [:]
+        leftTitles = [:]
         load()
+    }
+
+    /// 退出 App、换笔记库之前：存下所有改动，正在看的这篇标题改过就改文件名。
+    public func finishAll() {
+        if let id = selectedID {
+            finishEditing(id)
+            if let note = notes.first(where: { $0.id == id }) { titleWhenOpened[id] = note.parsed.title }
+        }
+        flushPendingSave()
     }
 
     // MARK: - 编辑
@@ -145,6 +172,13 @@ public final class AppModel {
         notes[i].text = text
         notes[i].modified = .now
         dirty.insert(id)
+        if dirtySince == nil { dirtySince = .now }
+        if id != selectedID, let opened = leftTitles[id] {
+            // 已经离开的笔记晚到的改动（比如输入法刚选完的字）：马上存，并按标题补改文件名
+            titleWhenOpened[id] = opened
+            finishEditing(id)
+            return
+        }
         scheduleSave()
     }
 
@@ -155,6 +189,7 @@ public final class AppModel {
         let pending = dirty
         dirty.removeAll()
         for id in pending { save(id) }
+        dirtySince = dirty.isEmpty ? nil : .now
     }
 
     // MARK: - 操作
@@ -167,6 +202,7 @@ public final class AppModel {
                                             inFolder: LibraryIndex.folderForNewNote(in: scope))
             notes.append(note)
             query = ""
+            tagFilter = nil
             select(note.id)
             freshNoteID = note.id
         } catch {
@@ -276,6 +312,7 @@ public final class AppModel {
     private func finishEditing(_ id: Note.ID) {
         if dirty.remove(id) != nil { save(id) }
         let openedTitle = titleWhenOpened.removeValue(forKey: id)
+        if let openedTitle { leftTitles[id] = openedTitle }
         guard let i = index(of: id), let openedTitle, openedTitle != notes[i].parsed.title else { return }
         do {
             let before = notes[i]
@@ -289,12 +326,14 @@ public final class AppModel {
         }
     }
 
+    /// 写盘。失败时这篇留在“没保存”里，改动不会被重新读取盖掉，之后还会再试。
     private func save(_ id: Note.ID) {
         guard let i = index(of: id) else { return }
         do {
             notes[i].modified = try store.write(notes[i])
         } catch {
-            lastError = "保存失败：\(error.localizedDescription)"
+            dirty.insert(id)
+            lastError = "保存失败：\(error.localizedDescription)。改动还在 App 里，之后会再试。"
         }
     }
 
@@ -307,6 +346,11 @@ public final class AppModel {
     }
 
     private func scheduleSave() {
+        // 一直不停地打字：最多隔 maxSaveDelay 存一次，不能一直往后拖
+        if let since = dirtySince, since.duration(to: .now) >= maxSaveDelay {
+            flushPendingSave()
+            return
+        }
         saveTask?.cancel()
         let delay = saveDelay
         saveTask = Task { [weak self] in

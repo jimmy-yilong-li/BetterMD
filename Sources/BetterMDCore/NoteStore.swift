@@ -35,7 +35,7 @@ public struct NoteStore: Sendable {
     /// 需要解析的笔记分到多个核上并行解析。
     public func load(reusing previous: [String: Note] = [:]) throws -> Snapshot {
         let state = loadState()
-        let keys: [URLResourceKey] = [.isDirectoryKey, .creationDateKey, .contentModificationDateKey]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey]
         guard let walker = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
@@ -62,7 +62,8 @@ public struct NoteStore: Sendable {
             guard url.pathExtension.lowercased() == "md" else { continue }
             let modified = values.contentModificationDate ?? .now
             let created = values.creationDate ?? modified
-            if let old = previous[path], old.modified == modified {
+            // 修改时间和大小都没变才沿用（有的网络盘、exFAT 时间只精确到秒，同一秒里的外部修改光看时间会漏掉）
+            if let old = previous[path], old.modified == modified, values.fileSize == old.text.utf8.count {
                 notes.append(Note(id: old.id, path: path, text: old.text, parsed: old.parsed, created: created,
                                   modified: modified, isPinned: state.pinned.contains(path),
                                   originalFolder: state.trashOrigins[path]))
@@ -155,11 +156,8 @@ public struct NoteStore: Sendable {
         guard Note.parentFolder(of: note.path) != folder else { return note }
         let dir = url(for: folder)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let target = LibraryLayout.uniqueURL(in: dir, base: note.fileBaseName)
-        try moveItem(at: url(for: note.path), to: target)
         var moved = note
-        moved.path = relativePath(of: target)
-        moved.originalFolder = nil
+        // 先在原处写下改好链接的正文，再挪文件：写失败时什么都没动，内存里的路径和磁盘一致
         if folder != LibraryLayout.trash {
             let rebased = MarkdownLinks.rebase(note.text, from: note.folder, to: folder)
             if rebased != note.text {
@@ -167,7 +165,20 @@ public struct NoteStore: Sendable {
                 moved.modified = try write(moved)
             }
         }
+        let target = LibraryLayout.uniqueURL(in: dir, base: baseNameForMove(note))
+        try moveItem(at: url(for: note.path), to: target)
+        moved.path = relativePath(of: target)
+        moved.originalFolder = nil
         return moved
+    }
+
+    /// 挪出废纸篓时，去掉在废纸篓里为了不重名加上的“ 2”这类后缀（文件名本来就是按标题起的才去）。
+    func baseNameForMove(_ note: Note) -> String {
+        let base = note.fileBaseName
+        guard note.isTrashed else { return base }
+        let titled = LibraryLayout.fileName(forTitle: note.parsed.title)
+        if base.hasPrefix(titled + " "), Int(base.dropFirst(titled.count + 1)) != nil { return titled }
+        return base
     }
 
     /// 移到废纸篓，记住原来的文件夹。
@@ -268,9 +279,18 @@ public struct NoteStore: Sendable {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let gb18030 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
             CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
-        guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: gb18030) else { return nil }
+        guard let text = String(data: data, encoding: .utf8) ?? Self.mostlyUTF8(data) ?? String(data: data, encoding: gb18030)
+        else { return nil }
         // （按字节查 \r：Swift 里 \r\n 是一个字符，按字符查找不到单独的 \r）
         return text.utf8.contains(13) ? Self.normalizeNewlines(text) : text
+    }
+
+    /// 大体是 UTF-8、只有个别坏字节（比如传输时损坏）的文件：按 UTF-8 读，坏字节换成 �。
+    /// 坏字节多的才可能是 GB18030 这类别的编码，返回 nil。
+    static func mostlyUTF8(_ data: Data) -> String? {
+        let text = String(decoding: data, as: UTF8.self)
+        let bad = text.unicodeScalars.reduce(0) { $0 + ($1 == "\u{FFFD}" ? 1 : 0) }
+        return bad <= max(2, data.count / 2000) ? text : nil
     }
 
     static func normalizeNewlines(_ text: String) -> String {
