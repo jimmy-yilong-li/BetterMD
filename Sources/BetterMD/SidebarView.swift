@@ -4,13 +4,68 @@ import SwiftUI
 /// 侧栏：我的笔记（红色笔记本）和它下面的文件夹（火漆信封，可以多层、可以折叠）、未分类（散页），
 /// 待办，标签（可以整组收起），废纸篓固定在最下面。不显示数量角标。
 struct SidebarView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(WindowState.self) private var window
+    @FocusState private var focused: Bool
+
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView { SidebarTree() }
-                .scrollIndicators(.never)
+            ScrollViewReader { proxy in
+                ScrollView { SidebarTree() }
+                    .scrollIndicators(.never)
+                    .onChange(of: model.scope) { _, scope in
+                        // 等上级展开、这一行画出来以后再滚过去
+                        DispatchQueue.main.async { withAnimation(Motion.quick) { proxy.scrollTo(scope) } }
+                    }
+            }
             SidebarFooter()
         }
+        .environment(\.paneHasKeyFocus, focused)
+        // 键盘：↑↓ 换一项，← → 收起展开（或回上级、去列表），↩ 去列表
+        .focusable(!window.focusMode)
+        .focusEffectDisabled()
+        .focused($focused)
+        .onKeyPress(.upArrow) { handle { .select(navigation.step(from: model.scope, by: -1)) } }
+        .onKeyPress(.downArrow) { handle { .select(navigation.step(from: model.scope, by: 1)) } }
+        .onKeyPress(.rightArrow) { handle { navigation.right(from: model.scope) } }
+        .onKeyPress(.leftArrow) { handle { navigation.left(from: model.scope) } }
+        .onKeyPress(.return) { handle { .toList } }
+        .onChange(of: window.paneRequest) { _, request in
+            // 正在输入文件夹名字时不抢焦点（抢走了输入框会当成取消）
+            guard request.pane == .sidebar, window.folderEdit == nil else { return }
+            takeKeyFocus($focused)
+        }
     }
+
+    /// 只在侧栏自己有焦点、没在输入文件夹名字时处理按键；否则交给输入框。
+    private func handle(_ action: () -> SidebarNavigation.Action?) -> KeyPress.Result {
+        guard focused, window.folderEdit == nil else { return .ignored }
+        if let action = action() { perform(action) }
+        return .handled
+    }
+
+    private var navigation: SidebarNavigation {
+        SidebarNavigation(folders: model.folderTree, tags: model.tagTree,
+                          expanded: window.sidebarExpanded, tagsOpen: window.tagsOpen)
+    }
+
+    private func perform(_ action: SidebarNavigation.Action) {
+        switch action {
+        case .expand(let key): withAnimation(Motion.expand) { _ = window.sidebarExpanded.insert(key) }
+        case .collapse(let key): withAnimation(Motion.expand) { _ = window.sidebarExpanded.remove(key) }
+        case .select(let scope): model.scope = scope
+        case .toList: window.focus(.list)
+        }
+    }
+}
+
+/// 把键盘焦点交给 SwiftUI 里的某一栏。焦点可能在编辑器网页或搜索框（AppKit 的视图）里，
+/// 这时光改 @FocusState 不一定生效：先让窗口收回焦点，下一轮再设。
+@MainActor
+func takeKeyFocus(_ focus: FocusState<Bool>.Binding) {
+    NSApp.keyWindow?.makeFirstResponder(nil)
+    focus.wrappedValue = false
+    DispatchQueue.main.async { focus.wrappedValue = true }
 }
 
 /// 侧栏最下面的废纸篓。
@@ -27,20 +82,22 @@ struct SidebarFooter: View {
 /// 侧栏里会滚动的部分：我的笔记和文件夹树、未分类、待办、标签。
 struct SidebarTree: View {
     @Environment(AppModel.self) private var model
-    /// 展开着的文件夹和标签（"folder:路径"、"tag:路径"）
-    @State private var expanded: Set<String>
-    @State private var tagsOpen = true
-    /// 正在就地新建（父文件夹路径）或重命名（文件夹路径）的文件夹
-    @State private var editing: FolderEdit?
-
-    enum FolderEdit: Equatable {
-        case create(parent: String)
-        case rename(path: String)
+    @Environment(WindowState.self) private var window
+    /// 正在就地新建（父文件夹路径）或重命名（文件夹路径）的文件夹；放在窗口状态里，侧栏的按键处理要知道
+    private var editing: WindowState.FolderEdit? {
+        get { window.folderEdit }
+        nonmutating set { window.folderEdit = newValue }
     }
 
-    /// `expanded`：一开始就展开的文件夹和标签（开发时画样张用）
-    init(expanded: Set<String> = []) {
-        _expanded = State(initialValue: expanded)
+    /// 展开着的文件夹和标签（"folder:路径"、"tag:路径"）；放在窗口状态里，键盘操作也要用
+    private var expanded: Set<String> {
+        get { window.sidebarExpanded }
+        nonmutating set { window.sidebarExpanded = newValue }
+    }
+
+    private var tagsOpen: Bool {
+        get { window.tagsOpen }
+        nonmutating set { window.tagsOpen = newValue }
     }
 
     var body: some View {
@@ -174,6 +231,8 @@ private struct SideRow<Icon: View>: View {
     enum Chevron { case leaf, open, closed }
 
     @Environment(AppModel.self) private var model
+    @Environment(WindowState.self) private var window
+    @Environment(\.paneHasKeyFocus) private var keyFocused
     let label: String
     let scope: Scope
     let depth: Int
@@ -221,9 +280,19 @@ private struct SideRow<Icon: View>: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(selected ? Ink.sideSelection : hovering ? Ink.hover : .clear)
         )
+        .overlay {
+            // 侧栏有键盘焦点时，选中的这一项加一圈细边
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Ink.accent.opacity(0.4), lineWidth: 1)
+                .opacity(selected && keyFocused ? 1 : 0)
+        }
         .contentShape(Rectangle())
+        .id(scope)
         .onHover { hovering = $0 }
-        .onTapGesture { model.scope = scope }
+        .onTapGesture {
+            model.scope = scope
+            window.focus(.sidebar)
+        }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .animation(.easeOut(duration: 0.15), value: selected)
         .accessibilityElement(children: .combine)

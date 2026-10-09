@@ -1,6 +1,6 @@
-// 格式快捷键：加粗、斜体、删除线、代码、链接、公式、标题、待办。
+// 格式命令：加粗、斜体、删除线、代码、链接、公式、标题、列表、待办、代码块、日期。快捷键在 main.js 里。
 import { EditorSelection } from '@codemirror/state';
-import { toggleTask } from './widgets.js';
+import { syntaxTree } from '@codemirror/language';
 
 const format = (view, spec) => view.dispatch(view.state.update(spec, { scrollIntoView: true, userEvent: 'input.format' }));
 
@@ -96,24 +96,98 @@ export function setHeading(level) {
   };
 }
 
-/** ⌘⇧T：不是待办的行变成待办；已经是待办的就勾上或取消。 */
-export function toggleTodo(view) {
+/**
+ * 这一行在语法上是什么：'heading' 小标题、'list' 列表项的第一行、'code' 代码块或公式块里面，别的返回 null。
+ * 按语法树判断，不看行首的字：代码块里的“# 注释”“- 项”不是标题、列表。
+ */
+export function lineKind(state, line) {
+  const indent = /^\s*/.exec(line.text)[0].length;
+  for (let node = syntaxTree(state).resolveInner(line.from + indent, 1); node; node = node.parent) {
+    if (/^(ATX|Setext)Heading/.test(node.name)) return 'heading';
+    if (node.name === 'FencedCode' || node.name === 'CodeBlock' || node.name === 'BlockMath') return 'code';
+    if (node.name === 'ListItem') return state.doc.lineAt(node.from).number === line.number ? 'list' : null;
+  }
+  return null;
+}
+
+const TODO_LINE = /^(\s*)(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s?/;
+const TODO_BOX = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])\]/;
+
+/** ⌘T：选中的行变成待办；全都已经是待办，就变回普通文字。选了好几行时空行不动。 */
+export function toggleTodoLines(view) {
   if (view.state.readOnly) return false;
-  const lines = selectedLines(view.state);
+  // 代码块里的行不动；选了好几行时空行也不动
+  let lines = selectedLines(view.state).filter(line => lineKind(view.state, line) !== 'code');
+  if (lines.length > 1) lines = lines.filter(line => line.text.trim() !== '');
+  const allTodo = lines.length > 0 && lines.every(line => TODO_LINE.test(line.text));
   const changes = [];
   for (const line of lines) {
-    if (/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]/.test(line.text)) {
-      if (lines.length === 1) return toggleTask(view, line.from);
-      continue;
+    const todo = TODO_LINE.exec(line.text);
+    if (allTodo) {
+      changes.push({ from: line.from + todo[1].length, to: line.from + todo[0].length });
+    } else if (!todo) {
+      const bullet = /^(\s*(?:[-*+]|\d+[.)])\s+)/.exec(line.text);
+      const indent = /^\s*/.exec(line.text)[0];
+      changes.push(bullet
+        ? { from: line.from + bullet[1].length, insert: '[ ] ' }
+        : { from: line.from + indent.length, insert: '- [ ] ' });
     }
-    const bullet = /^(\s*(?:[-*+]|\d+[.)])\s+)/.exec(line.text);
-    const indent = /^\s*/.exec(line.text)[0];
-    changes.push(bullet
-      ? { from: line.from + bullet[1].length, insert: '[ ] ' }
-      : { from: line.from + indent.length, insert: '- [ ] ' });
   }
   if (changes.length) formatLines(view, changes);
   return true;
+}
+
+/** ⌘.：勾上或取消选中的待办；有没勾的就全勾上，否则全取消。不是待办的行不动。 */
+export function toggleDone(view) {
+  if (view.state.readOnly) return false;
+  const todos = selectedLines(view.state)
+    .filter(line => lineKind(view.state, line) !== 'code')
+    .map(line => ({ line, m: TODO_BOX.exec(line.text) })).filter(t => t.m);
+  // 没有待办也算处理了：⌘. 漏给系统会被当成 Esc（退出专注模式）
+  if (!todos.length) return true;
+  const check = todos.some(t => t.m[2] === ' ');
+  const changes = todos.map(({ line, m }) => ({ from: line.from + m[1].length, to: line.from + m[1].length + 1, insert: check ? 'x' : ' ' }));
+  view.dispatch({ changes, userEvent: 'input.toggle' });
+  return true;
+}
+
+/** ⌃⌘C：选中了文字就用代码块围起来（整行），没选中就插入一个空代码块。 */
+export function toggleCodeBlock(view) {
+  if (view.state.readOnly) return false;
+  const lines = selectedLines(view.state);
+  // 已经在代码块里：再围一层会把外面的代码块提前截断
+  if (lines.some(line => lineKind(view.state, line) === 'code')) return true;
+  if (view.state.selection.main.empty || !lines.length) return insertBlock('```\n\n```', 4)(view);
+  const first = lines[0];
+  const last = lines[lines.length - 1];
+  format(view, {
+    changes: [{ from: first.from, insert: '```\n' }, { from: last.to, insert: '\n```' }],
+    selection: { anchor: first.from + 3 }, // 停在 ``` 后面，接着就能写语言名
+  });
+  return true;
+}
+
+/** 插入日期时用的文字：dateTime「2026年10月8日 09:30」、date「2026年10月8日」、shortDate「2026-10-08」、time「09:30」。 */
+export function dateText(kind, d = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const long = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  switch (kind) {
+    case 'dateTime': return `${long} ${time}`;
+    case 'date': return long;
+    case 'shortDate': return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    case 'time': return time;
+    default: return '';
+  }
+}
+
+/** ⇧⌘7…⇧⌘0：在光标处插入日期、时间（替换选中的文字）。 */
+export function insertDate(kind) {
+  return view => {
+    if (view.state.readOnly) return false;
+    format(view, view.state.replaceSelection(dateText(kind)));
+    return true;
+  };
 }
 
 /** 在行首插入或替换符号；行首的光标落在新符号后面，接着就能打字。 */

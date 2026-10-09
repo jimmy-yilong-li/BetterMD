@@ -28,49 +28,6 @@ struct BetterMDApp: App {
                     await DebugSnapshot.runIfRequested(model: model)
                 }
         }
-        .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("新建笔记") { model.newNote() }
-                    .keyboardShortcut("n")
-            }
-            CommandGroup(after: .newItem) {
-                Divider()
-                Button("选择笔记库位置…") { chooseLibrary() }
-            }
-            CommandGroup(after: .pasteboard) {
-                Divider()
-                Button("搜索") { NotificationCenter.default.post(name: .focusSearch, object: false) }
-                    .keyboardShortcut("f")
-                Button("搜索全部笔记") { NotificationCenter.default.post(name: .focusSearch, object: true) }
-                    .keyboardShortcut("f", modifiers: [.command, .shift])
-            }
-            CommandGroup(after: .sidebar) {
-                Button("专注模式") { NotificationCenter.default.post(name: .toggleFocusMode, object: nil) }
-                    .keyboardShortcut("d", modifiers: [.command, .shift])
-            }
-            CommandGroup(replacing: .help) {
-                Button("键盘快捷键") { NotificationCenter.default.post(name: .showShortcuts, object: nil) }
-                    .keyboardShortcut("/")
-            }
-            CommandGroup(replacing: .saveItem) {
-                Button("关闭窗口") { NSApp.keyWindow?.performClose(nil) }
-                    .keyboardShortcut("w")
-                Button("立即保存") { model.flushPendingSave() }
-                    .keyboardShortcut("s")
-            }
-        }
-    }
-
-    private func chooseLibrary() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.prompt = "用这个文件夹"
-        panel.message = "选一个文件夹当「我的笔记」"
-        panel.directoryURL = LibraryLocation.current
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        LibraryLocation.current = url
-        model.switchLibrary(to: url)
+        .commands { BetterMDCommands(model: model) }
     }
 }

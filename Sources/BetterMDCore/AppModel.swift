@@ -7,7 +7,10 @@ import Observation
 public final class AppModel {
     public private(set) var store: NoteStore
     public private(set) var notes: [Note] = [] {
-        didSet { notesVersion &+= 1 }
+        didSet {
+            notesVersion &+= 1
+            refreshSelectionFlags()
+        }
     }
     /// notes 每改一次加一。列表、标签树按它判断缓存还能不能用；它本身是被观察的，界面读缓存时也会跟着它刷新。
     private var notesVersion = 0
@@ -36,7 +39,20 @@ public final class AppModel {
     public var searchAll = false {
         didSet { if searchAll != oldValue { keepSelectionVisible() } }
     }
-    public private(set) var selectedID: Note.ID?
+    public private(set) var selectedID: Note.ID? {
+        didSet { refreshSelectionFlags() }
+    }
+    /// 选中的笔记的几样状态，给菜单栏判断哪些命令能用。只在这几样真变了时才更新：
+    /// 菜单读 selectedNote 的话，每打一个字（notes 变了）菜单栏都要重建一次。
+    public private(set) var selectionFlags = SelectionFlags()
+
+    public struct SelectionFlags: Equatable, Sendable {
+        public var hasNote = false
+        public var isTrashed = false
+        public var isPinned = false
+        /// 选中了笔记，而且能改（不在废纸篓里）
+        public var editable: Bool { hasNote && !isTrashed }
+    }
     /// 刚用 ⌘N 新建、还没离开过的笔记：编辑器打开它时直接选中标题，接着就能打字。
     public private(set) var freshNoteID: Note.ID?
     public var lastError: String?
@@ -125,6 +141,12 @@ public final class AppModel {
         return tree
     }
     public var selectedNote: Note? { selectedID.flatMap { id in notes.first { $0.id == id } } }
+
+    private func refreshSelectionFlags() {
+        let note = selectedNote
+        let flags = SelectionFlags(hasNote: note != nil, isTrashed: note?.isTrashed ?? false, isPinned: note?.isPinned ?? false)
+        if flags != selectionFlags { selectionFlags = flags }
+    }
 
     // MARK: - 读取
 

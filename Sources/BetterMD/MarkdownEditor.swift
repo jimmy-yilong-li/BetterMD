@@ -10,6 +10,8 @@ struct MarkdownEditor: NSViewRepresentable {
     let note: Note?
     /// 刚新建的笔记：打开时选中标题，接着就能打字。
     let selectTitle: Bool
+    /// 字号缩放（⌘+ / ⌘-），整个网页一起缩放
+    let zoom: Double
     let handle: EditorHandle
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
@@ -23,6 +25,7 @@ struct MarkdownEditor: NSViewRepresentable {
         webView.setValue(false, forKey: "drawsBackground")
         webView.underPageBackgroundColor = Paper.nsColor
         webView.allowsMagnification = false
+        webView.pageZoom = zoom
         webView.isInspectable = true
         context.coordinator.webView = webView
         handle.webView = webView
@@ -32,6 +35,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         handle.webView = webView
+        if webView.pageZoom != zoom { webView.pageZoom = zoom }
         context.coordinator.show(note, selectTitle: selectTitle)
     }
 
@@ -132,6 +136,8 @@ struct MarkdownEditor: NSViewRepresentable {
                 if let name = body["name"] as? String { model.scope = .tag(name) }
             case "exitFocus":
                 NotificationCenter.default.post(name: .toggleFocusMode, object: false)
+            case "focusList":
+                NotificationCenter.default.post(name: .focusPane, object: Pane.list.rawValue)
             default:
                 break
             }

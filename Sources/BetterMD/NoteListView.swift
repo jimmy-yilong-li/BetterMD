@@ -2,7 +2,7 @@ import BetterMDCore
 import SwiftUI
 
 extension Notification.Name {
-    /// 菜单「搜索」（⌘F）/「搜索全部」（⌘⇧F）：让列表顶部的搜索框获得焦点。
+    /// 菜单「搜索笔记」（⇧⌘F）/「搜索全部笔记」（⌥⇧⌘F）：让列表顶部的搜索框获得焦点。
     static let focusSearch = Notification.Name("BetterMD.focusSearch")
 }
 
@@ -39,13 +39,27 @@ struct NoteListView: View {
                     }
                     .padding(EdgeInsets(top: 2, leading: 8, bottom: 14, trailing: 8))
                     .animation(Motion.list, value: notes.map(\.id))
+                    .environment(\.paneHasKeyFocus, listFocused)
                 }
                 .scrollContentBackground(.hidden)
+                // 键盘：↑↓ 换一篇，→ 或 ↩ 去正文，← 去侧栏，直接打字就是搜索
                 .focusable(!window.focusMode)
                 .focusEffectDisabled()
                 .focused($listFocused)
                 .onKeyPress(.upArrow) { step(-1, in: notes) }
                 .onKeyPress(.downArrow) { step(1, in: notes) }
+                .onKeyPress(.rightArrow) { toEditor() }
+                .onKeyPress(.return) { toEditor() }
+                .onKeyPress(.leftArrow) {
+                    guard window.sidebarShown else { return .ignored } // 侧栏收起来了
+                    window.focus(.sidebar)
+                    return .handled
+                }
+                .onKeyPress(characters: Self.searchable, phases: .down) { typeToSearch($0) }
+                .onChange(of: window.paneRequest) { _, request in
+                    guard request.pane == .list else { return }
+                    takeKeyFocus($listFocused)
+                }
                 .onChange(of: model.selectedID) { _, id in
                     guard let id else { return }
                     withAnimation(Motion.quick) { proxy.scrollTo(id) }
@@ -61,7 +75,7 @@ struct NoteListView: View {
             // 专注模式里列表收起来了，它的搜索框和新建按钮也一起藏起来
             if !window.focusMode {
                 ToolbarItem {
-                    SearchField(text: Bindable(model).query, focusRequest: window.searchFocusRequest)
+                    SearchField(text: Bindable(model).query, focusRequest: window.searchFocusRequest) { window.focus(.list) }
                         .frame(width: 236)
                 }
                 .sharedBackgroundVisibility(.hidden) // 用自己凹进纸面的样子，不要工具栏的玻璃底
@@ -71,6 +85,27 @@ struct NoteListView: View {
                 }
             }
         }
+    }
+
+    /// 在列表里直接打字：按下的这个键转给搜索框（整个搜索词先选中，打的字替换它）。
+    /// 把原来的按键事件重新发一遍，而不是自己把字塞进去：中文输入法要从第一个键就接手，才拼得出字。
+    private static let searchable = CharacterSet.alphanumerics.union(.punctuationCharacters).union(.symbols)
+
+    private func typeToSearch(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.isDisjoint(with: [.command, .control, .option]),
+              let field = SearchFieldRegistry.field, let fieldWindow = field.window,
+              let event = NSApp.currentEvent, event.type == .keyDown,
+              // 搜索框没拿到焦点就别重发，不然这个键又回到列表，来回转
+              fieldWindow.makeFirstResponder(field), field.currentEditor() != nil else { return .ignored }
+        NSApp.postEvent(event, atStart: true)
+        return .handled
+    }
+
+    /// → 或 ↩：去正文接着写。
+    private func toEditor() -> KeyPress.Result {
+        guard model.selectedID != nil else { return .ignored }
+        window.focus(.editor)
+        return .handled
     }
 
     /// ↑ ↓ 换一篇。
@@ -212,16 +247,18 @@ private struct EmptyList: View {
     }
 }
 
-/// 凹进纸面的搜索框，带清除按钮；Esc 清空并退出。
+/// 凹进纸面的搜索框，带清除按钮；Esc 清空并回到列表，↓ 或 ↩ 回到列表看结果。
 struct SearchField: View {
     @Binding var text: String
-    /// 每加一，搜索框就拿一次键盘焦点（⌘F）
+    /// 每加一，搜索框就拿一次键盘焦点（⇧⌘F）
     var focusRequest: Int
+    /// 离开搜索框、回到列表
+    var leave: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium)).foregroundStyle(Ink.text3)
-            FocusableTextField(text: $text, placeholder: "搜索", focusRequest: focusRequest)
+            FocusableTextField(text: $text, placeholder: "搜索", focusRequest: focusRequest, leave: leave)
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 13)).foregroundStyle(Ink.text3)
@@ -239,12 +276,19 @@ struct SearchField: View {
     }
 }
 
-/// 能被 ⌘F 叫来焦点的输入框。工具栏里的 SwiftUI 输入框用 @FocusState 拿不到焦点（macOS 26 上实测），
+/// 列表上方的搜索框。在列表里直接打字时，要把按键转给它。
+@MainActor
+enum SearchFieldRegistry {
+    static weak var field: NSTextField?
+}
+
+/// 能被 ⇧⌘F 叫来焦点的输入框。工具栏里的 SwiftUI 输入框用 @FocusState 拿不到焦点（macOS 26 上实测），
 /// 所以用 AppKit 的 NSTextField，直接让它成为第一响应者。Esc 清空并交出焦点。
 private struct FocusableTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let focusRequest: Int
+    let leave: () -> Void
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField()
@@ -260,11 +304,13 @@ private struct FocusableTextField: NSViewRepresentable {
         field.cell?.lineBreakMode = .byTruncatingTail
         field.delegate = context.coordinator
         context.coordinator.handledRequest = focusRequest
+        SearchFieldRegistry.field = field
         return field
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.text = $text
+        context.coordinator.leave = leave
         if field.stringValue != text { field.stringValue = text }
         // 有新的聚焦请求：等这个输入框真的进了窗口再拿焦点（专注模式刚退出时它才刚出现）
         if context.coordinator.handledRequest != focusRequest {
@@ -285,14 +331,18 @@ private struct FocusableTextField: NSViewRepresentable {
         }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text, leave: leave) }
 
     @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var text: Binding<String>
+        var leave: () -> Void
         var handledRequest = 0
 
-        init(text: Binding<String>) { self.text = text }
+        init(text: Binding<String>, leave: @escaping () -> Void) {
+            self.text = text
+            self.leave = leave
+        }
 
         func controlTextDidChange(_ note: Notification) {
             guard let field = note.object as? NSTextField else { return }
@@ -300,11 +350,20 @@ private struct FocusableTextField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-            guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
-            text.wrappedValue = ""
-            control.stringValue = ""
-            control.window?.makeFirstResponder(nil)
-            return true
+            switch selector {
+            case #selector(NSResponder.cancelOperation(_:)):
+                // Esc：清空，回到列表
+                text.wrappedValue = ""
+                control.stringValue = ""
+                leave()
+                return true
+            case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.insertNewline(_:)):
+                // ↓ 或 ↩：带着搜索词回到列表，接着用 ↑↓ 挑结果
+                leave()
+                return true
+            default:
+                return false
+            }
         }
     }
 }

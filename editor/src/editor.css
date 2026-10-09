@@ -417,3 +417,35 @@ body::before {
 #editor.is-focus-mode .cm-focused .cm-table,
 #editor.is-focus-mode .cm-focused .cm-math-block,
 #editor.is-focus-mode .cm-focused .cm-image.is-block { opacity: .26; }
+
+/* ---- 笔记内查找（⌘F）、替换（⌥⌘F）：编辑区顶上的一条查找栏 ---- */
+#editor .cm-panels { background: var(--paper); color: var(--text); font: 12.5px/1.4 var(--font-ui); }
+#editor .cm-panels-top { border-bottom: 1px solid var(--sep); }
+#editor .cm-search {
+  position: relative;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  padding: 8px max(44px, calc((100% - 700px) / 2)) 9px; /* 和正文那一栏对齐 */
+}
+#editor .cm-search br { flex-basis: 100%; height: 0; content: ""; }
+#editor .cm-search .cm-textfield {
+  width: 220px; height: 26px; box-sizing: border-box;
+  padding: 0 10px; border: none; border-radius: 13px; outline: none;
+  background: var(--field); color: var(--text); font: inherit;
+  box-shadow: inset 0 1px 1.5px rgba(70, 45, 20, .12);
+}
+#editor .cm-search .cm-textfield:focus { box-shadow: inset 0 1px 1.5px rgba(70, 45, 20, .12), 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+#editor .cm-search .cm-button {
+  height: 24px; padding: 0 10px; border: 1px solid var(--sep); border-radius: 7px;
+  background: transparent; background-image: none; color: var(--text-2); font: inherit; cursor: default;
+}
+#editor .cm-search .cm-button:hover { background: var(--field); color: var(--text); }
+#editor .cm-search .cm-button:active { transform: scale(.97); }
+#editor .cm-search label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); font-size: 12px; }
+#editor .cm-search input[type=checkbox] { accent-color: var(--accent); margin: 0; }
+#editor .cm-search button[name=close] {
+  position: absolute; top: 8px; right: 14px; width: 24px; height: 24px; padding: 0;
+  border: none; border-radius: 6px; background: transparent; color: var(--text-3); font-size: 17px; line-height: 1;
+}
+#editor .cm-search button[name=close]:hover { background: var(--field); color: var(--text); }
+#editor .cm-searchMatch { background: color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 2px; }
+#editor .cm-searchMatch-selected { background: color-mix(in srgb, var(--accent) 34%, transparent); }

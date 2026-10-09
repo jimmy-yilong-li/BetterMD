@@ -4,7 +4,10 @@ import 'katex/dist/katex.min.css';
 import './editor.css';
 import { EditorState, EditorSelection, Compartment, Annotation, Transaction } from '@codemirror/state';
 import { EditorView, keymap, drawSelection, dropCursor, placeholder } from '@codemirror/view';
-import { history, historyKeymap, defaultKeymap, indentWithTab } from '@codemirror/commands';
+import {
+  history, historyKeymap, defaultKeymap, indentWithTab, moveLineUp, moveLineDown, indentMore, indentLess,
+} from '@codemirror/commands';
+import { search, openSearchPanel, closeSearchPanel, findNext, findPrevious } from '@codemirror/search';
 import { markdown, markdownLanguage, markdownKeymap } from '@codemirror/lang-markdown';
 import {
   syntaxHighlighting, HighlightStyle, codeFolding, foldKeymap, foldable, foldedRanges, foldEffect, unfoldEffect,
@@ -16,7 +19,10 @@ import {
   livePreview, mathTooltip, focusState, focusTracker, dirState, setDir, setFocus, metaState, setMeta, focusModeState, setFocusMode,
   wordCountState,
 } from './livePreview.js';
-import { toggleWrap, insertLink, insertMath, setHeading, toggleTodo, toggleLinePrefix, toggleList, insertBlock } from './commands.js';
+import {
+  toggleWrap, insertLink, insertMath, setHeading, toggleTodoLines, toggleDone, toggleLinePrefix, toggleList, insertBlock,
+  toggleCodeBlock, insertDate, lineKind,
+} from './commands.js';
 import { countParagraphs } from './helpers.js';
 import { post } from './bridge.js';
 
@@ -44,20 +50,79 @@ const inkStyle = HighlightStyle.define([
   { tag: t.invalid, color: 'var(--accent)' },
 ]);
 
-const formatKeys = [
+// 快捷键照 Bear 的来（见 docs/bear-reference.md）；⇧⌘E 公式、⌘0 变回正文是 BetterMD 自己的。
+// 菜单栏的「格式」「编辑」菜单里也有这些命令：编辑器有焦点时按键先到这里，没焦点时才轮到菜单。
+const editKeys = [
+  // 查找：在查找栏里按也算
+  { key: 'Escape', run: closeSearchPanel, scope: 'editor search-panel' },
+  { key: 'Mod-f', run: openSearchPanel, scope: 'editor search-panel', preventDefault: true },
+  { key: 'Alt-Mod-f', run: openReplace, scope: 'editor search-panel', preventDefault: true },
+  { key: 'Mod-g', run: findNext, shift: findPrevious, scope: 'editor search-panel', preventDefault: true },
   { key: 'Escape', run: () => { if (!focusMode) return false; post({ type: 'exitFocus' }); return true; } },
+  // 文字样式
   { key: 'Mod-b', run: toggleWrap('**') },
   { key: 'Mod-i', run: toggleWrap('*') },
-  { key: 'Mod-Shift-x', run: toggleWrap('~~') },
-  { key: 'Mod-e', run: toggleWrap('`') },
+  { key: 'Shift-Mod-u', run: toggleWrap('~~') },
+  { key: 'Alt-Mod-c', run: toggleWrap('`') },
   { key: 'Mod-k', run: insertLink },
-  { key: 'Mod-Shift-e', run: insertMath },
-  { key: 'Mod-Shift-t', run: toggleTodo },
-  { key: 'Mod-1', run: setHeading(1) },
-  { key: 'Mod-2', run: setHeading(2) },
-  { key: 'Mod-3', run: setHeading(3) },
+  { key: 'Shift-Mod-e', run: insertMath },
+  // 段落
+  ...[1, 2, 3, 4, 5, 6].map(n => ({ key: `Mod-${n}`, run: setHeading(n) })),
   { key: 'Mod-0', run: setHeading(0) },
+  { key: 'Mod-l', run: toggleList('bullet') },
+  { key: 'Shift-Mod-l', run: toggleList('number') },
+  { key: 'Mod-t', run: toggleTodoLines },
+  { key: 'Mod-.', run: toggleDone },
+  { key: 'Shift-Mod-t', run: toggleLinePrefix('> ') },
+  { key: 'Ctrl-Mod-c', run: toggleCodeBlock },
+  { key: 'Alt-Mod-t', run: v => FORMATS.table(v) },
+  // 日期
+  { key: 'Shift-Mod-7', run: insertDate('dateTime') },
+  { key: 'Shift-Mod-8', run: insertDate('date') },
+  { key: 'Shift-Mod-9', run: insertDate('shortDate') },
+  { key: 'Shift-Mod-0', run: insertDate('time') },
+  // 结构：上下移动行、缩进、折叠
+  { key: 'Alt-Mod-ArrowUp', run: moveLineUp },
+  { key: 'Alt-Mod-ArrowDown', run: moveLineDown },
+  { key: 'Alt-Mod-ArrowRight', run: indentMore },
+  { key: 'Alt-Mod-ArrowLeft', run: indentLess },
+  { key: "Mod-'", run: v => toggleFoldHere(v) },
 ];
+
+/** 光标在查找栏里（不在正文里）。 */
+const inSearchPanel = v => !!v.dom.querySelector('.cm-panels')?.contains(document.activeElement);
+
+// 在查找栏里打字时，格式快捷键什么都不做：不拦下的话，WKWebView 会把它们交给菜单，菜单又让编辑器去改正文
+const formatKeys = [
+  ...editKeys.map(b => b.scope ? b : {
+    ...b, scope: 'editor search-panel',
+    run: v => inSearchPanel(v) || b.run(v),
+    shift: b.shift && (v => inSearchPanel(v) || b.shift(v)),
+  }),
+  { key: 'Shift-Mod-v', run: () => true, scope: 'search-panel' }, // 插入文件也一样
+  // ⌘↩：回到笔记列表（在查找栏里 ⌘↩ 是“下一个”，不管）
+  { key: 'Mod-Enter', run: () => { post({ type: 'focusList' }); return true; } },
+];
+
+/** ⌥⌘F：打开查找栏，光标放进“替换为”（只读的笔记没有替换，就停在查找框里）。 */
+function openReplace(v) {
+  openSearchPanel(v);
+  const focusReplace = () => {
+    const field = v.dom.querySelector('.cm-search input[name=replace]');
+    if (field) { field.focus(); field.select(); }
+  };
+  focusReplace();
+  setTimeout(focusReplace);
+  return true;
+}
+
+// 查找栏里的字
+const searchPhrases = EditorState.phrases.of({
+  'Find': '查找', 'Replace': '替换为', 'next': '下一个', 'previous': '上一个', 'all': '全部选中',
+  'match case': '区分大小写', 'regexp': '正则表达式', 'by word': '整词', 'replace': '替换', 'replace all': '全部替换',
+  'close': '关闭', 'current match': '当前', 'on line': '行', 'replaced $ matches': '替换了 $ 处',
+  'replaced match on line $': '替换了第 $ 行的一处',
+});
 
 // 折叠起来的一节显示成“N 段”
 const folding = codeFolding({
@@ -95,6 +160,7 @@ const extensions = [
   EditorView.updateListener.of(movePendingInserts),
   syntaxHighlighting(inkStyle),
   focusState, focusTracker, dirState, metaState, focusModeState, livePreview, mathTooltip, folding,
+  search({ top: true }), searchPhrases,
   placeholder('开始写…'),
   yuanToDollars,
   // ⌘/ 留给 App 的「键盘快捷键」，不要默认的“切换注释”
@@ -285,6 +351,35 @@ function onMouseDown(event, v) {
   return false;
 }
 
+/**
+ * ⌘'：折叠或展开光标所在的这一节。光标在小标题或带下级的列表项上，就折它；
+ * 在一节的正文里，就折它所在的那一节（光标挪到小标题上，免得被折进去）。
+ */
+function toggleFoldHere(v) {
+  const { state } = v;
+  const foldedAt = line => {
+    let hit = false;
+    foldedRanges(state).between(line.to, line.to + 1, from => { if (from === line.to) hit = true; });
+    return hit;
+  };
+  const canToggle = line => ['heading', 'list'].includes(lineKind(state, line))
+    && (foldedAt(line) || foldable(state, line.from, line.to) !== null);
+  let line = state.doc.lineAt(state.selection.main.head);
+  if (!canToggle(line)) {
+    // 往上找最近的、能折的小标题（代码块里的“# 注释”不算）
+    let heading = null;
+    for (let n = line.number - 1; n >= 1 && !heading; n--) {
+      const above = state.doc.line(n);
+      if (lineKind(state, above) === 'heading' && canToggle(above)) heading = above;
+    }
+    if (!heading) return true;
+    line = heading;
+    v.dispatch({ selection: { anchor: line.to } });
+  }
+  toggleSection(v, line.from);
+  return true;
+}
+
 function toggleSection(v, pos) {
   const line = v.state.doc.lineAt(pos);
   let open = null;
@@ -415,9 +510,11 @@ function insertAttachments(items, range = view.state.selection.main) {
 
 const TABLE = '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |';
 
-/** 格式面板（Aa）里的按钮。 */
+/** 格式面板（Aa）的按钮和菜单栏的命令。 */
 const FORMATS = {
   heading: setHeading(2),
+  ...Object.fromEntries([1, 2, 3, 4, 5, 6].map(n => [`h${n}`, setHeading(n)])),
+  paragraph: setHeading(0),
   bold: toggleWrap('**'),
   italic: toggleWrap('*'),
   strike: toggleWrap('~~'),
@@ -425,17 +522,36 @@ const FORMATS = {
   link: insertLink,
   list: toggleList('bullet'),
   numbered: toggleList('number'),
-  todo: toggleTodo,
+  todo: toggleTodoLines,
+  done: toggleDone,
   quote: toggleLinePrefix('> '),
   rule: insertBlock('---\n', 4),
-  codeBlock: insertBlock('```\n\n```', 4),
+  codeBlock: toggleCodeBlock,
   table: insertBlock(TABLE, TABLE.lastIndexOf('\n') + 3), // 光标在第一个空格子里
   math: view => insertMath(view),
+  dateTime: insertDate('dateTime'),
+  date: insertDate('date'),
+  shortDate: insertDate('shortDate'),
+  time: insertDate('time'),
+  moveUp: moveLineUp,
+  moveDown: moveLineDown,
+  fold: v => toggleFoldHere(v),
+  find: openSearchPanel,
+  replace: openReplace,
+  findNext,
+  findPrevious,
 };
 
+/** 只读的笔记（废纸篓里）也能用的命令。 */
+const READ_ONLY_OK = new Set(['find', 'replace', 'findNext', 'findPrevious', 'fold']);
+const FIND_COMMANDS = new Set(['find', 'replace', 'findNext', 'findPrevious']);
+
+/** 格式面板、菜单栏的命令（编辑器没有焦点时，快捷键走菜单，最后也到这里）。 */
 function format(kind) {
   const run = FORMATS[kind];
-  if (!run || view.state.readOnly) return;
+  if (!run || (view.state.readOnly && !READ_ONLY_OK.has(kind))) return;
+  // 光标在查找栏里时，菜单来的格式命令不改正文（查找命令照常）
+  if (inSearchPanel(view) && !FIND_COMMANDS.has(kind)) return;
   view.focus();
   run(view);
 }

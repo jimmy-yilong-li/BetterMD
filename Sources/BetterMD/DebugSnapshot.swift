@@ -144,11 +144,13 @@ enum DebugSnapshot {
     /// 纯 SwiftUI 画的东西都能这样核对，不受窗口截图的限制。
     @MainActor
     private static func renderGallery(to target: URL, model: AppModel) {
+        let window = WindowState()
+        window.sidebarExpanded = Set(model.folders.map { "folder:" + $0 })
         let sheet = HStack(alignment: .top, spacing: 0) {
             ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
                 HStack(alignment: .top, spacing: 0) {
                     VStack(spacing: 0) {
-                        SidebarTree(expanded: Set(model.folders.map { "folder:" + $0 }))
+                        SidebarTree()
                         Spacer(minLength: 0)
                         SidebarFooter()
                     }
@@ -157,6 +159,7 @@ enum DebugSnapshot {
                     DebugGallery().frame(height: 560, alignment: .top).background(Ink.listPaper)
                 }
                 .environment(model)
+                .environment(window)
                 .environment(\.colorScheme, scheme)
             }
         }

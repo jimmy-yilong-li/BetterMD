@@ -45,7 +45,8 @@ struct ContentView: View {
                 }
             }
         }
-        .onChange(of: columns) { _, visible in
+        .onChange(of: columns, initial: true) { _, visible in
+            window.sidebarShown = visible != .detailOnly
             // 专注模式里自己把侧栏拉出来，就算退出了专注模式
             if window.focusMode && visible != .detailOnly { window.focusMode = false }
         }
@@ -53,8 +54,14 @@ struct ContentView: View {
             window.focusMode = (note.object as? Bool) ?? !window.focusMode
         }
         .onReceive(NotificationCenter.default.publisher(for: .showShortcuts)) { _ in window.showShortcuts = true }
+        .onReceive(NotificationCenter.default.publisher(for: .focusPane)) { note in
+            guard let pane = (note.object as? String).flatMap(Pane.init(rawValue:)) else { return }
+            // 专注模式里要回到列表或侧栏：先退出专注模式，它们才回来
+            if window.focusMode && pane != .editor { window.focusMode = false }
+            window.focus(pane)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .focusSearch)) { note in
-            // ⌘F / ⌘⇧F：专注模式里先退出（列表和搜索框才回来），再让搜索框拿到焦点
+            // ⇧⌘F / ⌥⇧⌘F：专注模式里先退出（列表和搜索框才回来），再让搜索框拿到焦点
             if window.focusMode { window.focusMode = false }
             if note.object as? Bool == true { model.searchAll = true }
             window.searchFocusRequest += 1

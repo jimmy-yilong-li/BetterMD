@@ -10,10 +10,12 @@ struct EditorView: View {
     @Environment(WindowState.self) private var window
     @State private var handle = EditorHandle()
     @State private var showFormats = false
+    /// 编辑区的字号（⌘+ / ⌘-）
+    @AppStorage(EditorZoom.key) private var zoom = 1.0
 
     var body: some View {
         let note = model.selectedNote
-        MarkdownEditor(model: model, note: note, selectTitle: note != nil && note?.id == model.freshNoteID, handle: handle)
+        MarkdownEditor(model: model, note: note, selectTitle: note != nil && note?.id == model.freshNoteID, zoom: zoom, handle: handle)
             .background(Ink.paper.ignoresSafeArea())
             .overlay {
                 if note == nil {
@@ -62,7 +64,7 @@ struct EditorView: View {
                     Button { window.focusMode.toggle() } label: {
                         Label("专注", systemImage: window.focusMode ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                     }
-                    .help(window.focusMode ? "退出专注模式（Esc）" : "专注模式（⌘⇧D）")
+                    .help(window.focusMode ? "退出专注模式（Esc）" : "专注模式（⇧⌘D）")
                     MoreMenu(note: note)
                 }
             }
@@ -70,6 +72,13 @@ struct EditorView: View {
                 handle.setFocusMode(on)
                 // 列表收起来了，键盘焦点交给编辑器（Esc 退出专注模式也靠编辑器）
                 if on { handle.focusEditor() }
+            }
+            .onChange(of: window.paneRequest) { _, request in
+                if request.pane == .editor && note != nil { handle.focusEditor() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .editorCommand)) { message in
+                guard let command = message.object as? String, note != nil else { return }
+                if command == "insertFile" { chooseFiles() } else { handle.format(command) }
             }
     }
 

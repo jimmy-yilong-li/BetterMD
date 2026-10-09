@@ -13,6 +13,7 @@ struct NoteRow: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.paneHasKeyFocus) private var keyFocused
     @State private var hovering = false
     @State private var thumbnail: NSImage?
 
@@ -59,6 +60,12 @@ struct NoteRow: View {
         }
         .padding(EdgeInsets(top: 11, leading: 10, bottom: 10, trailing: 10))
         .background(background)
+        .overlay {
+            // 列表有键盘焦点时，选中的卡片加一圈细边
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Ink.accent.opacity(0.4), lineWidth: 1)
+                .opacity(selected && keyFocused ? 1 : 0)
+        }
         .overlay(alignment: .topTrailing) {
             if note.isPinned && !note.isTrashed { RibbonView().padding(.trailing, 18) }
         }

@@ -64,13 +64,13 @@ const setDoc = (id, text, opts = {}) => run(`window.bettermd.setDocument(${JSON.
 const cursorAt = expr => run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: ${expr} } }); })()`);
 const atEnd = () => cursorAt('v.state.doc.length');
 const atText = text => cursorAt(`v.state.doc.toString().indexOf(${JSON.stringify(text)})`);
-const key = async (k, code, modifiers = 0, text) => {
-  const vk = k === 'Enter' ? 13 : k.length === 1 ? k.toUpperCase().charCodeAt(0) : 0;
+const key = async (k, code, modifiers = 0, text, keyCode) => {
+  const vk = keyCode ?? (k === 'Enter' ? 13 : k.length === 1 ? k.toUpperCase().charCodeAt(0) : 0);
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, modifiers, text, windowsVirtualKeyCode: vk });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, modifiers });
   await delay(60);
 };
-const META = 4;
+const ALT = 1, CTRL = 2, META = 4, SHIFT = 8;
 const type = async text => {
   for (const ch of text) {
     if (ch === '\n') await key('Enter', 'Enter', 0, '\r');
@@ -259,6 +259,103 @@ await setDoc('C', '一行字');
 await atEnd();
 await key('/', 'Slash', META);
 check('⌘/ 不会把这一行变成 HTML 注释', (await doc()) === '一行字', JSON.stringify(await doc()));
+
+
+// ---- 快捷键（照 Bear）：按真的按键，看正文怎么变 ----
+const selectAll = () => run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } }); })()`);
+await setDoc('K', '买菜');
+await atEnd();
+await key('t', 'KeyT', META);
+check('⌘T 变成待办', (await doc()) === '- [ ] 买菜', JSON.stringify(await doc()));
+await key('.', 'Period', META, undefined, 190);
+check('⌘. 勾上待办', (await doc()) === '- [x] 买菜', JSON.stringify(await doc()));
+await key('.', 'Period', META, undefined, 190);
+check('再按 ⌘. 取消', (await doc()) === '- [ ] 买菜', JSON.stringify(await doc()));
+await key('t', 'KeyT', META);
+check('待办上再按 ⌘T 变回普通文字', (await doc()) === '买菜', JSON.stringify(await doc()));
+await run('window.sent = []');
+await key('.', 'Period', META, undefined, 190);
+check('普通文字上按 ⌘. 什么都不改，也不会当成 Esc', (await doc()) === '买菜' && !(await run('window.sent.some(m => m.type === "exitFocus")')));
+
+await setDoc('K2', '甲\n\n乙');
+await selectAll();
+await key('t', 'KeyT', META);
+check('选了好几行按 ⌘T，空行不变成待办', (await doc()) === '- [ ] 甲\n\n- [ ] 乙', JSON.stringify(await doc()));
+
+const styled = async (name, k, code, mods, vk, before, after) => {
+  await setDoc('S' + name, before);
+  await selectAll();
+  await key(k, code, mods, undefined, vk);
+  check(name, (await doc()) === after, JSON.stringify(await doc()));
+};
+await styled('⇧⌘U 删除线', 'U', 'KeyU', SHIFT | META, 85, '字', '~~字~~');
+await styled('⌥⌘C 行内代码', 'ç', 'KeyC', ALT | META, 67, 'x', '`x`');
+await styled('⌘L 列表', 'l', 'KeyL', META, 76, 'a', '- a');
+await styled('⇧⌘L 编号', 'L', 'KeyL', SHIFT | META, 76, 'a', '1. a');
+await styled('⇧⌘T 引用', 'T', 'KeyT', SHIFT | META, 84, 'a', '> a');
+await styled('⌘4 四级标题', '4', 'Digit4', META, 52, 'a', '#### a');
+await styled('⌃⌘C 选中的文字围成代码块', 'c', 'KeyC', CTRL | META, 67, 'let a = 1', '```\nlet a = 1\n```');
+
+await setDoc('M', '一\n二\n三');
+await atText('一');
+await key('ArrowDown', 'ArrowDown', ALT | META, undefined, 40);
+check('⌥⌘↓ 把这一行往下挪', (await doc()) === '二\n一\n三', JSON.stringify(await doc()));
+
+await setDoc('D', '');
+await atEnd();
+await key('*', 'Digit8', SHIFT | META, undefined, 56);
+check('⇧⌘8 插入日期', /^\d{4}年\d{1,2}月\d{1,2}日$/.test(await doc()), JSON.stringify(await doc()));
+
+await setDoc('F', '# 一节\n\n第一段\n\n第二段\n\n# 下一节\n\n别的');
+await atText('第二段');
+await key("'", 'Quote', META, undefined, 222);
+check("⌘' 在正文里按，折起所在的这一节", (await count('.cm-fold-badge')) === 1);
+await key("'", 'Quote', META, undefined, 222);
+check("再按 ⌘' 展开", (await count('.cm-fold-badge')) === 0);
+
+await setDoc('Q', '苹果 香蕉 苹果');
+await atEnd();
+await key('f', 'KeyF', META);
+check('⌘F 打开查找栏', (await count('.cm-search')) === 1);
+await type('苹果');
+// 真打字时每个键松开都会让查找栏读一次输入框；这里是直接塞进去的字，补一个 change
+await run(`document.querySelector('.cm-search input[name=search]').dispatchEvent(new Event('change'))`);
+await key('Enter', 'Enter', 0, '\r');
+const found = await run('(() => { const v = window.bettermd.view; const r = v.state.selection.main; return v.state.sliceDoc(r.from, r.to); })()');
+check('查找栏里回车选中下一个', found === '苹果', JSON.stringify(found));
+await key('Escape', 'Escape', 0, undefined, 27);
+check('Esc 关掉查找栏', (await count('.cm-search')) === 0);
+check('查找不改正文', (await doc()) === '苹果 香蕉 苹果');
+
+await key('f', 'KeyF', META);
+// 查找栏里的格式键要被编辑器拦下（没拦下的键，App 里会交给菜单，菜单再去改正文）
+const swallowed = await run(`(() => {
+  const input = document.querySelector('.cm-search input[name=search]');
+  return ['b', 't', '1'].map(k => !input.dispatchEvent(new KeyboardEvent('keydown',
+    { key: k, code: k === '1' ? 'Digit1' : 'Key' + k.toUpperCase(), keyCode: k.toUpperCase().charCodeAt(0), metaKey: true, bubbles: true, cancelable: true })));
+})()`);
+check('查找栏里的 ⌘B、⌘T、⌘1 被拦下，不会漏给菜单，也不改正文', swallowed.every(Boolean) && (await doc()) === '苹果 香蕉 苹果', JSON.stringify([swallowed, await doc()]));
+await run('window.bettermd.format("bold"); window.bettermd.format("todo")');
+check('光标在查找栏里时，菜单来的格式命令不改正文', (await doc()) === '苹果 香蕉 苹果', JSON.stringify(await doc()));
+await key('Escape', 'Escape', 0, undefined, 27);
+
+await setDoc('CB', '```sh\n# 注释\necho hi\n```');
+await atText('echo');
+await key('t', 'KeyT', META);
+await key('c', 'KeyC', CTRL | META, undefined, 67);
+check('代码块里按 ⌘T、⌃⌘C 不改代码', (await doc()) === '```sh\n# 注释\necho hi\n```', JSON.stringify(await doc()));
+
+await setDoc('F2', '# 一节\n\n```sh\n# 注释\n```\n\n正文');
+await atText('正文');
+await key("'", 'Quote', META, undefined, 222);
+check("⌘' 跳过代码块里的“# 注释”，折起真正的那一节", (await count('.cm-fold-badge')) === 1);
+
+await setDoc('Q', '苹果 香蕉 苹果');
+await atEnd();
+await run('window.sent = []');
+await key('Enter', 'Enter', META, undefined, 13);
+check('⌘↩ 请 App 把焦点交给笔记列表', await run('window.sent.some(m => m.type === "focusList")'));
+check('⌘↩ 不往正文里加空行', (await doc()) === '苹果 香蕉 苹果');
 
 check('页面没有报错', pageErrors.length === 0, pageErrors.join(' | '));
 console.log(failures ? `\n${failures} 项没通过` : '\n全部通过');
