@@ -7,11 +7,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const lib = require('./lib.js');
 const library = require('./library.js');
+const binding = require('./binding.js');
+const links = require('./links.js');
 
 const VIEW_TYPE = 'bettermd.editor';
 
 function activate(context) {
-  const provider = new Provider(context);
+  const tree = library.register(context);
+  binding.register(context, tree);
+  const provider = new Provider(context, tree);
   context.subscriptions.push(
     vscode.window.registerCustomEditorProvider(VIEW_TYPE, provider, {
       // 切到别的标签再回来时不重新加载网页（光标、撤销记录都还在）
@@ -24,7 +28,6 @@ function activate(context) {
     vscode.commands.registerCommand('bettermd.openInBetterMD', uri => openWith(uri, VIEW_TYPE)),
     vscode.commands.registerCommand('bettermd.insertFile', () => provider.active?.insertFiles()),
   );
-  library.register(context);
 }
 
 /** 换一种方式打开当前文件：'default' 是 VS Code 的文本编辑器（看源码）。 */
@@ -34,14 +37,15 @@ function openWith(uri, viewType) {
 }
 
 class Provider {
-  constructor(context) {
+  constructor(context, tree) {
     this.context = context;
+    this.tree = tree;
     /** 现在在前台的那个编辑器（⇧⌘V 插入文件要知道往哪篇里插） */
     this.active = null;
   }
 
   resolveCustomTextEditor(document, panel) {
-    const session = new Session(this.context, document, panel);
+    const session = new Session(this.context, document, panel, this.tree?.root);
     const track = () => {
       if (panel.active) this.active = session;
       else if (this.active === session) this.active = null;
@@ -58,7 +62,7 @@ class Provider {
 
 /** 一个标签页里的一篇笔记。 */
 class Session {
-  constructor(context, document, panel) {
+  constructor(context, document, panel, libraryRoot = null) {
     this.document = document;
     this.panel = panel;
     this.id = document.uri.toString();
@@ -66,6 +70,11 @@ class Session {
     const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
     /** root：图片这类相对链接能用到的最上一层；dir：这篇所在的文件夹（相对 root） */
     this.place = this.isFile ? lib.placeOf(document.uri.fsPath, folders) : null;
+    // 绑定了一篇笔记的项目文件：两边正文一样，图片这类相对链接是按笔记的位置写的，按笔记的位置找、存附件
+    this.link = this.isFile && libraryRoot && !this.place?.inLibrary ? links.linkForFile(libraryRoot, document.uri.fsPath) : null;
+    if (this.link) {
+      this.place = { root: libraryRoot, dir: path.posix.dirname(this.link.note).replace(/^\.$/, ''), inLibrary: true };
+    }
     /** 编辑器发来的改动的最大编号（放内容进编辑器时带上，规则见 editor/src/main.js 的 setDocument） */
     this.lastSeq = 0;
     /** 编辑器里现在的正文（最后一次收到或送进去的） */
@@ -186,6 +195,7 @@ class Session {
 
   /** 标题下面那行小字里的位置：笔记库里的写文件夹（根目录是「未分类」），别处写工作区和文件夹。 */
   folderLabel() {
+    if (this.link) return `和笔记「${this.link.note.replace(/\.md$/i, '').split('/').join(' / ')}」同步`;
     if (!this.place) return '';
     const { root, dir, inLibrary } = this.place;
     if (inLibrary) return dir ? dir.split('/').join(' / ') : '未分类';

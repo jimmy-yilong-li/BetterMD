@@ -15,7 +15,7 @@ step "编辑器打包" npm --prefix editor run build --silent
 step "Swift" swift test --quiet --no-parallel
 step "编辑器单元测试" npm --prefix editor test --silent
 step "编辑器按键测试（无头 Chrome）" npm --prefix editor run test:browser --silent
-step "VS Code 插件单元测试" node --test vscode/test/lib.test.js vscode/test/notes.test.js vscode/test/library.test.js
+step "VS Code 插件单元测试" node --test vscode/test/*.test.js
 step "VS Code 插件同步测试（无头 Chrome）" node vscode/test/sync.mjs
 
 if (( ${#failed} )); then

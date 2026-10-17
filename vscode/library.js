@@ -4,6 +4,7 @@ const vscode = require('vscode');
 const path = require('node:path');
 const fs = require('node:fs');
 const notes = require('./notes.js');
+const links = require('./links.js');
 const { dateLabel } = require('./lib.js');
 
 class LibraryTree {
@@ -13,6 +14,8 @@ class LibraryTree {
     this.root = null;
     this.scan = { folders: [], notes: [], texts: new Map() };
     this.tree = [];
+    /** 笔记路径 → 绑定（绑到项目里哪个文件） */
+    this.links = new Map();
     this.watcher = null;
     this.timer = null;
   }
@@ -42,6 +45,17 @@ class LibraryTree {
   async refresh() {
     this.scan = this.root && fs.existsSync(this.root) ? await notes.scanLibrary(this.root) : { folders: [], notes: [], texts: new Map() };
     this.tree = notes.buildTree(this.scan);
+    this.readLinks();
+    this.changed.fire();
+  }
+
+  readLinks() {
+    this.links = new Map(this.root ? links.readLinks(this.root).map(l => [l.note, l]) : []);
+  }
+
+  /** 绑定的登记变了：只重画，不用重扫 */
+  linksChanged() {
+    this.readLinks();
     this.changed.fire();
   }
 
@@ -63,11 +77,12 @@ class LibraryTree {
     if (node.kind === 'note') {
       const { note } = node;
       const item = new vscode.TreeItem(note.title, vscode.TreeItemCollapsibleState.None);
-      item.description = dateLabel(note.modified);
-      item.tooltip = note.path;
+      const link = this.links.get(note.path);
+      item.description = link ? `↔ ${path.basename(link.file)} · ${dateLabel(note.modified)}` : dateLabel(note.modified);
+      item.tooltip = link ? `${note.path}\n和项目里的 ${link.file} 同步` : note.path;
       item.resourceUri = this.uri(note);
-      item.iconPath = new vscode.ThemeIcon(note.pinned ? 'pinned' : note.todo ? 'checklist' : 'note');
-      item.contextValue = 'note';
+      item.iconPath = new vscode.ThemeIcon(link ? 'link' : note.pinned ? 'pinned' : note.todo ? 'checklist' : 'note');
+      item.contextValue = link ? 'boundNote' : 'note';
       item.command = { command: 'vscode.open', title: '打开', arguments: [this.uri(note)] };
       return item;
     }

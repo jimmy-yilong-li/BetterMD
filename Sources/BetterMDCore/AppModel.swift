@@ -15,6 +15,8 @@ public final class AppModel {
     /// notes 每改一次加一。列表、标签树按它判断缓存还能不能用；它本身是被观察的，界面读缓存时也会跟着它刷新。
     private var notesVersion = 0
     public private(set) var folders: [String] = []
+    /// 绑定：笔记路径 → 项目里的文件（同步由 VS Code 插件做，App 只显示、只在笔记挪动时改路径）
+    public private(set) var links: [String: LibraryLinks.Link] = [:]
     public private(set) var state = LibraryState()
     public var scope: Scope = .all {
         didSet {
@@ -212,6 +214,7 @@ public final class AppModel {
             }
             notes = loaded
             folders = snapshot.folders
+            links = LibraryLinks(root: store.root).byNote()
             pruneState(downloading: snapshot.downloading)
             // 重新读取只在选中的那篇没了时才换选中：别的文件变了不能把编辑器换到另一篇（接着打的字会进那一篇）
             if let id = selectedID, !notes.contains(where: { $0.id == id }) { keepSelectionVisible() }
@@ -468,6 +471,12 @@ public final class AppModel {
             }
             state.folderRenamed(from: path, to: newPath)
             saveState()
+            do {
+                try LibraryLinks(root: store.root).folderRenamed(from: path, to: newPath)
+            } catch {
+                lastError = "文件夹里有绑定了项目文件的笔记，绑定没跟着改过来：\(error.localizedDescription)"
+            }
+            links = LibraryLinks(root: store.root).byNote()
             if case .folder(let current) = scope { scope = .folder(swap(current)) }
         } catch {
             lastError = "重命名文件夹失败：\(error.localizedDescription)"
@@ -490,6 +499,7 @@ public final class AppModel {
             let before = notes[i]
             let after = try operation(before)
             notes[i] = after
+            notePathChanged(from: before.path, to: after.path)
             if !after.isTrashed && !after.folder.isEmpty { ensureFolderListed(after.folder) }
             state.record(from: before, to: after)
             saveState()
@@ -497,6 +507,17 @@ public final class AppModel {
         } catch {
             lastError = "\(failure)：\(error.localizedDescription)"
         }
+    }
+
+    /// 笔记挪了地方（改名、移动、进出废纸篓）：绑定的登记跟着改，不然 VS Code 插件就找不到这一篇了。
+    private func notePathChanged(from old: String, to new: String) {
+        guard old != new, links[old] != nil else { return }
+        do {
+            try LibraryLinks(root: store.root).noteMoved(from: old, to: new)
+        } catch {
+            lastError = "「\(new)」绑定了项目里的文件，绑定没跟着改过来：\(error.localizedDescription)"
+        }
+        links = LibraryLinks(root: store.root).byNote()
     }
 
     /// 放回原处时文件夹可能是重新建的，侧栏里要马上出现它和它的上级。
@@ -521,6 +542,7 @@ public final class AppModel {
             let renamed = try store.renameToMatchTitle(before)
             guard renamed.path != before.path else { return }
             notes[i] = renamed
+            notePathChanged(from: before.path, to: renamed.path)
             state.record(from: before, to: renamed)
             saveState()
         } catch {

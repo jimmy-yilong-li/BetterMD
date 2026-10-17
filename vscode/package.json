@@ -78,6 +78,32 @@
         "command": "bettermd.openSource",
         "title": "显示 Markdown 源码",
         "category": "BetterMD"
+      },
+      {
+        "command": "bettermd.bindFile",
+        "title": "绑定到「我的笔记」…",
+        "category": "BetterMD",
+        "icon": "$(link)"
+      },
+      {
+        "command": "bettermd.exportNote",
+        "title": "另存到项目并绑定…",
+        "category": "BetterMD"
+      },
+      {
+        "command": "bettermd.unbind",
+        "title": "解除绑定",
+        "category": "BetterMD"
+      },
+      {
+        "command": "bettermd.openBoundFile",
+        "title": "打开项目里的文件",
+        "category": "BetterMD"
+      },
+      {
+        "command": "bettermd.openBoundNote",
+        "title": "打开绑定的笔记",
+        "category": "BetterMD"
       }
     ],
     "menus": {
@@ -109,6 +135,14 @@
         {
           "command": "bettermd.openSource",
           "when": "false"
+        },
+        {
+          "command": "bettermd.bindFile",
+          "when": "resourceExtname =~ /^\\.(md|markdown)$/"
+        },
+        {
+          "command": "bettermd.exportNote",
+          "when": "activeCustomEditorId == 'bettermd.editor'"
         }
       ],
       "view/title": [
@@ -141,24 +175,58 @@
         },
         {
           "command": "bettermd.copyPath",
-          "when": "view == bettermd.library && viewItem == note",
+          "when": "view == bettermd.library && viewItem =~ /^(note|boundNote)$/",
           "group": "2_path@1"
         },
         {
           "command": "bettermd.revealInFinder",
-          "when": "view == bettermd.library && viewItem == note",
+          "when": "view == bettermd.library && viewItem =~ /^(note|boundNote)$/",
           "group": "2_path@2"
         },
         {
           "command": "bettermd.openSource",
-          "when": "view == bettermd.library && viewItem == note",
+          "when": "view == bettermd.library && viewItem =~ /^(note|boundNote)$/",
           "group": "3_open"
+        },
+        {
+          "command": "bettermd.exportNote",
+          "when": "view == bettermd.library && viewItem == note",
+          "group": "4_bind@1"
+        },
+        {
+          "command": "bettermd.openBoundFile",
+          "when": "view == bettermd.library && viewItem == boundNote",
+          "group": "4_bind@1"
+        },
+        {
+          "command": "bettermd.unbind",
+          "when": "view == bettermd.library && viewItem == boundNote",
+          "group": "4_bind@2"
         }
       ],
       "editor/title/context": [
         {
           "command": "bettermd.copyPath",
           "when": "activeCustomEditorId == 'bettermd.editor'"
+        },
+        {
+          "command": "bettermd.bindFile",
+          "when": "resourceExtname =~ /^\\.(md|markdown)$/"
+        },
+        {
+          "command": "bettermd.openBoundNote",
+          "when": "resourceExtname =~ /^\\.(md|markdown)$/"
+        },
+        {
+          "command": "bettermd.unbind",
+          "when": "resourceExtname =~ /^\\.(md|markdown)$/"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "bettermd.bindFile",
+          "when": "resourceExtname =~ /^\\.(md|markdown)$/",
+          "group": "7_modification@9"
         }
       ]
     },
@@ -390,6 +458,9 @@
     ]
   },
   "scripts": {
-    "test": "node --test test/lib.test.js test/notes.test.js test/library.test.js"
-  }
+    "test": "node --test test/*.test.js"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ]
 }

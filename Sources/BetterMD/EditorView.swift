@@ -275,6 +275,14 @@ private struct MoreMenu: View {
                 Button("在 Finder 中显示") {
                     NSWorkspace.shared.activateFileViewerSelecting([model.store.url(for: note.path)])
                 }
+                if let link = model.links[note.path] {
+                    // 绑定了项目里的文件（在 VS Code 里绑的，插件负责同步）
+                    Divider()
+                    Text("和项目里的「\((link.file as NSString).lastPathComponent)」同步")
+                    Button("在 Finder 中显示项目里的文件") {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: link.file)])
+                    }
+                }
                 Divider()
             }
             Button(window.focusMode ? "退出专注模式" : "专注模式") { window.focusMode.toggle() }
