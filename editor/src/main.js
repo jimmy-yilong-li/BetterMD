@@ -23,7 +23,8 @@ import {
   toggleWrap, insertLink, insertMath, setHeading, toggleTodoLines, toggleDone, toggleLinePrefix, toggleList, insertBlock,
   toggleCodeBlock, insertDate, lineKind,
 } from './commands.js';
-import { countParagraphs } from './helpers.js';
+import { countParagraphs, setLibraryBase } from './helpers.js';
+import { watchTheme } from './theme.js';
 import { post } from './bridge.js';
 
 // 文字的颜色和字形；字号、行距这些在 editor.css 里
@@ -444,21 +445,38 @@ document.addEventListener('drop', event => {
   onDrop(event, view);
 });
 
-/** 正在等 App 存附件的插入点。等的时候还能接着打字，插入点跟着正文的改动挪，存好时插在挪过以后的位置。 */
+/**
+ * 正在等 App 存附件的位置（选中了文字时是一段）。等的时候还能接着打字，这段跟着正文的改动挪，存好时换在挪过以后的地方。
+ * 两头往里收：别人在它前后打的字不算进去，存好时不会被一起换掉。
+ */
 const pendingInserts = new Set();
 
 function movePendingInserts(update) {
   if (!update.docChanged) return;
-  for (const pending of pendingInserts) pending.pos = update.changes.mapPos(pending.pos, -1);
+  for (const pending of pendingInserts) {
+    if (pending.from === pending.to) {
+      // 粘贴在光标处：在这里接着打的字排在附件后面。选中的字被盖掉以后（follow）：附件跟在打的字后面
+      pending.from = pending.to = update.changes.mapPos(pending.from, pending.follow ? 1 : -1);
+      continue;
+    }
+    // 选中的那段被接着打的字盖掉了：附件插在打的字后面，什么都不替换
+    let overwritten = false;
+    update.changes.iterChangedRanges((fromA, toA) => { if (fromA < pending.to && toA > pending.from) overwritten = true; });
+    if (overwritten) {
+      pending.from = pending.to = update.changes.mapPos(pending.to, 1);
+      pending.follow = true;
+    } else {
+      pending.from = update.changes.mapPos(pending.from, 1);
+      pending.to = Math.max(pending.from, update.changes.mapPos(pending.to, -1));
+    }
+  }
 }
 
 async function insertFiles(v, files, range) {
   const id = current.id;
-  // 选中的字马上删掉（和普通粘贴一样），只记下插入点
-  if (range.from !== range.to) {
-    v.dispatch({ changes: { from: range.from, to: range.to }, selection: { anchor: range.from }, userEvent: 'input.paste' });
-  }
-  const pending = { pos: range.from };
+  // 选中的字先不删：附件存好以后，和链接一起换掉（一步，⌘Z 能整个撤回）。
+  // 等的时候换了笔记、附件没存成，正文都原样；先删的话，删掉的字会照常存进文件，插入却取消了
+  const pending = { from: range.from, to: range.to };
   pendingInserts.add(pending);
   try {
     const items = [];
@@ -468,7 +486,7 @@ async function insertFiles(v, files, range) {
       if (reply?.link) items.push({ link: reply.link, name: file.name, image: file.type.startsWith('image/') });
     }
     if (current.id !== id || !items.length) return;
-    insertAttachments(items, EditorSelection.cursor(pending.pos));
+    insertAttachments(items, EditorSelection.range(pending.from, pending.to));
   } finally {
     pendingInserts.delete(pending);
   }
@@ -563,10 +581,13 @@ function setFocusModeOn(on) {
   view.dispatch({ effects: setFocusMode.of(focusMode) });
 }
 
+watchTheme();
+
 window.bettermd = {
   setDocument,
   clear,
   format,
+  setLibraryBase,
   setFocusMode: setFocusModeOn,
   insertAttachments: items => insertAttachments(items),
   focus: () => view.focus(),

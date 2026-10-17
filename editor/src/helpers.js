@@ -94,8 +94,15 @@ export function resolveTarget(dir, src) {
 }
 
 /** 「我的笔记」里的文件在编辑器网页里的地址（App 里由 bettermd:// 协议供应）。 */
+let libraryBase = 'bettermd://library/';
+
+/** 笔记库里的文件从哪个地址读：App 里是 bettermd://library/，VS Code 里是它给的 webview 地址（以 / 结尾）。 */
+export function setLibraryBase(base) {
+  libraryBase = base.endsWith('/') ? base : base + '/';
+}
+
 export function libraryURL(path) {
-  return 'bettermd://library/' + path.split('/').map(encodeURIComponent).join('/');
+  return libraryBase + path.split('/').map(encodeURIComponent).join('/');
 }
 
 /** 折叠的一节里有几段：按空行分开的文字块（代码块、公式块算一段）。 */

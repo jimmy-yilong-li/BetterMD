@@ -1,7 +1,7 @@
 /* BetterMD 编辑区：纸墨。宋体配 Iowan Old Style，暖白纸色，墨色文字，朱砂点缀。 */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --accent: #B8452F;
   --paper: #FBF8F2;
   --text: #2A2621;
@@ -24,27 +24,28 @@
   --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --accent: #D86A50;
-    --paper: #1A1816;
-    --text: #ECE5D8;
-    --text-2: #AAA194;
-    --text-3: #70695F;
-    --marker: #5F584F;
-    --sep: rgba(255, 240, 220, .09);
-    --field: rgba(255, 240, 220, .07);
-    --code-bg: rgba(255, 240, 220, .047);
-    --fig-bg: #211E1B;
-    --sel: color-mix(in srgb, var(--accent) 26%, transparent);
-    --emboss: 0 -1px 0 rgba(0, 0, 0, .55);
-    --grain-opacity: .035;
-    --c-kw: #e48ab8; --c-str: #e8906f; --c-num: #d8b56a; --c-com: #7d756b; --c-type: #8cc5b8; --c-fn: #9fb1e6;
-  }
+/* 深色：theme.js 按情况给 <html> 加 theme-dark（App 里跟着系统，VS Code 里跟着 VS Code 的主题） */
+:root.theme-dark {
+  color-scheme: dark;
+  --accent: #D86A50;
+  --paper: #1A1816;
+  --text: #ECE5D8;
+  --text-2: #AAA194;
+  --text-3: #70695F;
+  --marker: #5F584F;
+  --sep: rgba(255, 240, 220, .09);
+  --field: rgba(255, 240, 220, .07);
+  --code-bg: rgba(255, 240, 220, .047);
+  --fig-bg: #211E1B;
+  --sel: color-mix(in srgb, var(--accent) 26%, transparent);
+  --emboss: 0 -1px 0 rgba(0, 0, 0, .55);
+  --grain-opacity: .035;
+  --c-kw: #e48ab8; --c-str: #e8906f; --c-num: #d8b56a; --c-com: #7d756b; --c-type: #8cc5b8; --c-fn: #9fb1e6;
 }
 
 html, body {
   margin: 0;
+  padding: 0; /* VS Code 给插件网页的 body 默认留了左右 20px */
   height: 100%;
   background: var(--paper);
   color: var(--text);

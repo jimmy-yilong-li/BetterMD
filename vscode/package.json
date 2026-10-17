@@ -1,0 +1,271 @@
+{
+  "name": "bettermd",
+  "displayName": "BetterMD",
+  "description": "用 BetterMD 的编辑器打开 Markdown：所见即所得、公式、图片、表格，和 BetterMD App 用的是同一个编辑器。",
+  "version": "0.1.0",
+  "publisher": "bettermd",
+  "private": true,
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "bettermd.editor",
+        "displayName": "BetterMD",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          },
+          {
+            "filenamePattern": "*.markdown"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "bettermd.showSource",
+        "title": "显示 Markdown 源码",
+        "category": "BetterMD",
+        "icon": "$(code)"
+      },
+      {
+        "command": "bettermd.openInBetterMD",
+        "title": "用 BetterMD 打开",
+        "category": "BetterMD",
+        "icon": "$(book)"
+      },
+      {
+        "command": "bettermd.insertFile",
+        "title": "插入图片或文件…",
+        "category": "BetterMD"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "bettermd.showSource",
+          "when": "activeCustomEditorId == 'bettermd.editor'",
+          "group": "navigation"
+        },
+        {
+          "command": "bettermd.openInBetterMD",
+          "when": "resourceLangId == markdown && activeCustomEditorId != 'bettermd.editor'",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "bettermd.insertFile",
+          "when": "activeCustomEditorId == 'bettermd.editor'"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "key": "cmd+z",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+z",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+b",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+i",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+k",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+l",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+l",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+t",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+t",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+.",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+1",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+2",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+3",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+4",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+5",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+6",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+0",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+u",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "alt+cmd+c",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "ctrl+cmd+c",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "alt+cmd+t",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+e",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+7",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+8",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+9",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+0",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "alt+cmd+up",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "alt+cmd+down",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "alt+cmd+left",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "alt+cmd+right",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+'",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+enter",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+f",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "alt+cmd+f",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "cmd+g",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+g",
+        "command": "bettermd.noop",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      },
+      {
+        "key": "shift+cmd+v",
+        "command": "bettermd.insertFile",
+        "when": "activeCustomEditorId == 'bettermd.editor' && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inQuickOpen && !notificationFocus"
+      }
+    ],
+    "configuration": {
+      "title": "BetterMD",
+      "properties": {
+        "bettermd.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "打字停下来一会儿就自动保存，和 BetterMD App 一样。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/lib.test.js"
+  }
+}

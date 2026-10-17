@@ -75,7 +75,8 @@ struct NoteListView: View {
             // 专注模式里列表收起来了，它的搜索框和新建按钮也一起藏起来
             if !window.focusMode {
                 ToolbarItem {
-                    SearchField(text: Bindable(model).query, focusRequest: window.searchFocusRequest) { window.focus(.list) }
+                    SearchField(text: Bindable(model).query, focusRequest: window.searchFocusRequest,
+                                requestedAt: window.searchFocusRequestedAt) { window.focus(.list) }
                         .frame(width: 236)
                 }
                 .sharedBackgroundVisibility(.hidden) // 用自己凹进纸面的样子，不要工具栏的玻璃底
@@ -252,13 +253,15 @@ struct SearchField: View {
     @Binding var text: String
     /// 每加一，搜索框就拿一次键盘焦点（⇧⌘F）
     var focusRequest: Int
+    /// 最近一次请求的时间
+    var requestedAt: Date = .distantPast
     /// 离开搜索框、回到列表
     var leave: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium)).foregroundStyle(Ink.text3)
-            FocusableTextField(text: $text, placeholder: "搜索", focusRequest: focusRequest, leave: leave)
+            FocusableTextField(text: $text, placeholder: "搜索", focusRequest: focusRequest, requestedAt: requestedAt, leave: leave)
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 13)).foregroundStyle(Ink.text3)
@@ -288,6 +291,7 @@ private struct FocusableTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let focusRequest: Int
+    let requestedAt: Date
     let leave: () -> Void
 
     func makeNSView(context: Context) -> NSTextField {
@@ -305,6 +309,8 @@ private struct FocusableTextField: NSViewRepresentable {
         field.delegate = context.coordinator
         context.coordinator.handledRequest = focusRequest
         SearchFieldRegistry.field = field
+        // 刚请求过焦点（专注模式里按了 ⇧⌘F，退出专注模式时这个搜索框才建出来）：现在就去拿
+        if Date.now.timeIntervalSince(requestedAt) < 2 { focus(field, attempts: 20) }
         return field
     }
 

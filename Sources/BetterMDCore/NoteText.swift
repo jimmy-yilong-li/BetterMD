@@ -147,6 +147,37 @@ public enum NoteText {
         }
     }
 
+    /// 逐行判断是不是代码：围栏代码块，以及按 CommonMark 规则认的缩进代码块——
+    /// 缩进 4 格（或一个 Tab），前面是空行或者也是缩进代码，而且不在列表里（列表项缩进的续行是正文）。
+    struct CodeTracker {
+        private var fences = FenceTracker()
+        private var previousBlank = true
+        private var inIndentedCode = false
+        private var inList = false
+
+        mutating func isCode(_ line: String) -> Bool {
+            if fences.isCode(line) {
+                previousBlank = false
+                inIndentedCode = false
+                return true
+            }
+            let blank = line.trimmingCharacters(in: .whitespaces).isEmpty
+            defer { previousBlank = blank }
+            if blank { return inIndentedCode }
+            let indented = line.hasPrefix("    ") || line.hasPrefix("\t")
+            if indented && (inIndentedCode || (previousBlank && !inList)) {
+                inIndentedCode = true
+                return true
+            }
+            inIndentedCode = false
+            if !indented {
+                inList = line.trimmingCharacters(in: .whitespaces).firstMatch(of: #/^(?:[-*+]|\d+[.)])(?:\s|$)/#) != nil
+                    || (inList && !previousBlank) // 列表项的懒续行
+            }
+            return false
+        }
+    }
+
     /// 缩进 4 格（或一个 Tab）的代码行；列表项缩进的不算。
     static func isIndentedCode(_ line: String) -> Bool {
         guard line.hasPrefix("    ") || line.hasPrefix("\t") else { return false }

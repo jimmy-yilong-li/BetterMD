@@ -142,7 +142,17 @@ public struct NoteStore: Sendable {
         let target = LibraryLayout.uniqueURL(in: dir, base: base)
         try Data(text.utf8).write(to: target, options: .atomic)
         let now = Date()
-        return Note(path: relativePath(of: target), text: text, created: now, modified: now)
+        // 修改时间用文件自己的：保存前要拿它和磁盘上的比，看别处有没有改过
+        let modified = (try? target.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
+        return Note(path: relativePath(of: target), text: text, created: now, modified: modified)
+    }
+
+    /// 在这篇笔记旁边另存一份正文，文件名是“标题（suffix）”，重名加序号；返回文件名。
+    public func saveCopy(_ text: String, besides note: Note, suffix: String) throws -> String {
+        let dir = url(for: note.path).deletingLastPathComponent()
+        let target = LibraryLayout.uniqueURL(in: dir, base: LibraryLayout.fileName(forTitle: "\(note.title)（\(suffix)）"))
+        try Data(text.utf8).write(to: target, options: .atomic)
+        return target.lastPathComponent
     }
 
     public func loadState() -> LibraryState {
@@ -182,18 +192,26 @@ public struct NoteStore: Sendable {
         let dir = url(for: folder)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var moved = note
-        // 先在原处写下改好链接的正文，再挪文件：写失败时什么都没动，内存里的路径和磁盘一致
+        // 先挪文件，再在新位置写下改好链接的正文：挪不动时什么都没改；写不进去就挪回原处。
+        // （反过来先写再挪的话，挪不动时原处的文件已经带着按新位置写的链接了）
+        let source = url(for: note.path)
+        let target = LibraryLayout.uniqueURL(in: dir, base: baseNameForMove(note))
+        try moveItem(at: source, to: target)
+        moved.path = relativePath(of: target)
+        moved.originalFolder = nil
         if folder != LibraryLayout.trash {
             let rebased = MarkdownLinks.rebase(note.text, from: note.folder, to: folder)
             if rebased != note.text {
                 moved.text = rebased
-                moved.modified = try write(moved)
+                do {
+                    moved.modified = try write(moved)
+                } catch {
+                    if (try? moveItem(at: target, to: source)) != nil { throw error }
+                    // 挪也挪不回去：文件留在新位置，正文没改（链接按原来的文件夹写，图片靠按文件名到「附件」里找）
+                    moved.text = note.text
+                }
             }
         }
-        let target = LibraryLayout.uniqueURL(in: dir, base: baseNameForMove(note))
-        try moveItem(at: url(for: note.path), to: target)
-        moved.path = relativePath(of: target)
-        moved.originalFolder = nil
         return moved
     }
 
@@ -271,11 +289,17 @@ public struct NoteStore: Sendable {
         let parts = path.split(separator: "/").map(String.init)
         guard let name = parts.last, !parts.contains(where: { $0 == ".." || $0 == "." }) else { return nil }
         let fm = FileManager.default
-        var isDir: ObjCBool = false
+        // 符号链接解开以后还得在「我的笔记」里面，不然编辑器网页就能读到库外面的文件
+        let base = root.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        let usable = { (candidate: URL) -> Bool in
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: candidate.path, isDirectory: &isDir) && !isDir.boolValue
+                && candidate.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(base)
+        }
         let direct = url(for: parts.joined(separator: "/"))
-        if fm.fileExists(atPath: direct.path, isDirectory: &isDir), !isDir.boolValue { return direct }
+        if usable(direct) { return direct }
         let fallback = url(for: LibraryLayout.attachments).appendingPathComponent(name)
-        if fm.fileExists(atPath: fallback.path, isDirectory: &isDir), !isDir.boolValue { return fallback }
+        if usable(fallback) { return fallback }
         return nil
     }
 
@@ -311,11 +335,13 @@ public struct NoteStore: Sendable {
     }
 
     /// 大体是 UTF-8、只有个别坏字节（比如传输时损坏）的文件：按 UTF-8 读，坏字节换成 �。
-    /// 坏字节多的才可能是 GB18030 这类别的编码，返回 nil。
+    /// 按比例判断：GB18030 这类别的编码，几乎每个非 ASCII 字节在 UTF-8 里都是坏的；损坏的 UTF-8 只坏一小部分。
+    /// 坏的超过非 ASCII 字节的一成，就不是 UTF-8，返回 nil。（只看个数不行：短的 GB18030 文件只有一两个“坏字节”）
     static func mostlyUTF8(_ data: Data) -> String? {
         let text = String(decoding: data, as: UTF8.self)
         let bad = text.unicodeScalars.reduce(0) { $0 + ($1 == "\u{FFFD}" ? 1 : 0) }
-        return bad <= max(2, data.count / 2000) ? text : nil
+        let nonASCII = data.reduce(0) { $0 + ($1 >= 0x80 ? 1 : 0) }
+        return bad * 10 <= nonASCII ? text : nil
     }
 
     static func normalizeNewlines(_ text: String) -> String {

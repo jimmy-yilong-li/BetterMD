@@ -24,7 +24,14 @@ final class WindowState {
     var focusMode = false
     var showShortcuts = false
     /// ⇧⌘F：每加一，列表上方的搜索框就拿一次焦点
-    var searchFocusRequest = 0
+    private(set) var searchFocusRequest = 0
+    /// 上一次请搜索框拿焦点的时间。专注模式里搜索框不在，退出时才新建：新建的搜索框看到请求是刚发的，也要去拿焦点
+    private(set) var searchFocusRequestedAt = Date.distantPast
+
+    func requestSearchFocus() {
+        searchFocusRequest += 1
+        searchFocusRequestedAt = .now
+    }
     /// 请某一栏拿键盘焦点（← → 在三栏之间切换）。serial 每次加一，同一栏连着请两次也算两次。
     private(set) var paneRequest = PaneRequest(pane: .list, serial: 0)
     /// 侧栏里展开着的文件夹和标签（"folder:路径"、"tag:路径"）

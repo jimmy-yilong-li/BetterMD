@@ -11,6 +11,8 @@ struct ContentView: View {
     @State private var columns: NavigationSplitViewVisibility = .all
     /// 进专注模式前侧栏、列表的样子，退出时恢复
     @State private var columnsBeforeFocus: NavigationSplitViewVisibility = .all
+    /// 盯着「我的笔记」：VS Code 这类别的程序改了文件，App 马上读进来
+    @State private var watcher: LibraryWatcher?
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
@@ -64,7 +66,7 @@ struct ContentView: View {
             // ⇧⌘F / ⌥⇧⌘F：专注模式里先退出（列表和搜索框才回来），再让搜索框拿到焦点
             if window.focusMode { window.focusMode = false }
             if note.object as? Bool == true { model.searchAll = true }
-            window.searchFocusRequest += 1
+            window.requestSearchFocus()
         }
         .sheet(isPresented: Bindable(window).showShortcuts) { ShortcutsView() }
         .alert("出了点问题", isPresented: errorShown) {
@@ -80,10 +82,33 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             model.finishAll()
+            model.rescueUnsaved(into: RescueFolder.url)
+        }
+        .task { RescueFolder.announce(to: model) }
+        .task(id: model.store.root) {
+            watcher?.stop()
+            watcher = LibraryWatcher(root: model.store.root) { paths in model.filesChanged(paths) }
         }
     }
 
     private var errorShown: Binding<Bool> {
         Binding(get: { model.lastError != nil }, set: { if !$0 { model.lastError = nil } })
+    }
+}
+
+/// 退出时没存下的笔记放在哪：~/Library/Application Support/BetterMD/没存下的笔记/。下次打开时提醒一次。
+enum RescueFolder {
+    static var url: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent("BetterMD/没存下的笔记", isDirectory: true)
+    }
+
+    @MainActor
+    static func announce(to model: AppModel) {
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.filter { $0.hasSuffix(".md") } ?? []
+        let seen = UserDefaults.standard.integer(forKey: "rescuedNotesSeen")
+        guard files.count > seen else { return }
+        UserDefaults.standard.set(files.count, forKey: "rescuedNotesSeen")
+        model.lastError = "上次退出时有笔记没能存进「我的笔记」，另存在了 \(url.path)，一共 \(files.count) 个文件，可以在 Finder 里打开拷回去。"
     }
 }

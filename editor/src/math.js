@@ -130,9 +130,15 @@ export const mathSyntax = {
       const from = cx.lineStart + line.pos;
       const marks = opener.open ? [cx.elt('BlockMathMark', from, from + opener.open)] : [];
       let to = cx.lineStart + line.text.length;
+      // 结尾记号后面还有字（“$$ 是质能方程”）：公式块到结尾记号为止，后面的字留在外面照常显示，不跟着公式藏起来
+      const endAt = closeAt => {
+        const after = closeAt + opener.close.length;
+        if (line.text.slice(after).trim() !== '') to = cx.lineStart + after;
+      };
       if (opener.single) {
         const close = line.text.indexOf(opener.close, line.pos + Math.max(opener.open, 1));
         if (opener.open) marks.push(cx.elt('BlockMathMark', cx.lineStart + close, cx.lineStart + close + opener.close.length));
+        endAt(close);
         cx.nextLine();
       } else {
         while (cx.nextLine() && line.depth >= cx.stack.length) {
@@ -141,6 +147,7 @@ export const mathSyntax = {
           const end = line.text.indexOf(opener.close, line.basePos);
           if (end >= 0) {
             if (opener.open) marks.push(cx.elt('BlockMathMark', cx.lineStart + end, cx.lineStart + end + opener.close.length));
+            endAt(end);
             cx.nextLine();
             break;
           }

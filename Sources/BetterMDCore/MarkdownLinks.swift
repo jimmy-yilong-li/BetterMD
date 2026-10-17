@@ -13,11 +13,11 @@ public enum MarkdownLinks {
     /// 网址、页内锚点、以 / 开头的路径、跳出「我的笔记」的路径、代码块里的内容都不动。
     public static func rebase(_ text: String, from oldFolder: String, to newFolder: String) -> String {
         guard oldFolder != newFolder, text.contains("](") || text.contains("]:") else { return text }
-        var fences = NoteText.FenceTracker()
+        var code = NoteText.CodeTracker()
         var lines: [String] = []
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
-            lines.append(fences.isCode(line) ? line : rebaseLine(line, from: oldFolder, to: newFolder))
+            lines.append(code.isCode(line) ? line : rebaseLine(line, from: oldFolder, to: newFolder))
         }
         return lines.joined(separator: "\n")
     }
@@ -69,12 +69,40 @@ public enum MarkdownLinks {
         guard line.contains("](") else { return line }
         let code = line.matches(of: codeSpan).map(\.range)
         return line.replacing(destination) { match in
-            guard !code.contains(where: { $0.overlaps(match.range) }),
+            guard !code.contains(where: { $0.overlaps(match.range) }), opensLink(line, closingAt: match.range.lowerBound),
                   let moved = rebasePath(String(match.output.1), from: oldFolder, to: newFolder) else {
                 return String(match.output.0)
             }
             return "](" + moved + match.output.2 + ")"
         }
+    }
+
+    /// `close` 处的 `]` 真的是链接文字的结尾：它自己没被转义，往前能找到配对的、没被转义的 `[`。
+    /// “\\[不是链接](a.png)”“[x\\](b.png)”不是链接。
+    static func opensLink(_ line: String, closingAt close: String.Index) -> Bool {
+        func escaped(_ i: String.Index) -> Bool {
+            var count = 0
+            var j = i
+            while j > line.startIndex {
+                j = line.index(before: j)
+                guard line[j] == "\\" else { break }
+                count += 1
+            }
+            return count % 2 == 1
+        }
+        guard !escaped(close) else { return false }
+        var depth = 0
+        var i = close
+        while i > line.startIndex {
+            i = line.index(before: i)
+            guard !escaped(i) else { continue }
+            if line[i] == "]" { depth += 1 }
+            if line[i] == "[" {
+                if depth == 0 { return true }
+                depth -= 1
+            }
+        }
+        return false
     }
 
     static func rebasePath(_ written: String, from oldFolder: String, to newFolder: String) -> String? {
@@ -97,7 +125,8 @@ public enum MarkdownLinks {
         }
         guard !parts.isEmpty else { return nil }
         let steps = relative(from: segments(newFolder), to: parts)
-        let joined = (angled ? steps : steps.map(encode)).joined(separator: "/")
+        // 尖括号里空格、括号可以原样写，但 %、#、?、尖括号还得转义：%23 解出来的 # 原样写回去，就成了页内锚点
+        let joined = steps.map { angled ? encodeAngled($0) : encode($0) }.joined(separator: "/")
         let rebased = joined + dest[cut...]
         return angled ? "<" + rebased + ">" : rebased
     }
@@ -114,6 +143,22 @@ public enum MarkdownLinks {
     }
 
     /// 链接里不能直接出现的字符转义掉（各种空白都算）；中文照原样写，好认。
+    /// 写在尖括号里的一段路径：只转义 %、#、?、< 和 >。
+    static func encodeAngled(_ segment: String) -> String {
+        var out = ""
+        for ch in segment {
+            switch ch {
+            case "%": out += "%25"
+            case "#": out += "%23"
+            case "?": out += "%3F"
+            case "<": out += "%3C"
+            case ">": out += "%3E"
+            default: out.append(ch)
+            }
+        }
+        return out
+    }
+
     static func encode(_ segment: String) -> String {
         var out = ""
         for ch in segment {

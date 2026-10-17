@@ -69,6 +69,9 @@ public final class AppModel {
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     /// 打开笔记时的标题；离开时标题变了才改文件名。
     @ObservationIgnored private var titleWhenOpened: [Note.ID: String] = [:]
+    /// 每篇笔记上次读进来或存下去时，文件的修改时间。保存前和磁盘上的对一下：对不上就是别的程序（VS Code、git）
+    /// 也改过这个文件，那份要另存，不能被这里的版本悄悄盖掉。（Note.modified 打字时就变了，不能拿来比）
+    @ObservationIgnored private var diskModified: [Note.ID: Date] = [:]
     /// 有笔记还在从 iCloud 下载时，过一会儿再读一遍；每等一次，下次多等一倍（最长一分钟），没网时不空转。
     @ObservationIgnored private var downloadCheck: Task<Void, Never>?
     @ObservationIgnored var downloadWait: Duration = .seconds(1)
@@ -162,7 +165,9 @@ public final class AppModel {
                 snapshot.state.welcomed = true
                 try store.saveState(snapshot.state)
             }
-            // 还没存下的改动（比如保存失败了）不能被磁盘上的旧版本盖掉
+            for note in snapshot.notes where !dirty.contains(note.id) { diskModified[note.id] = note.modified }
+            // 还没存下的改动（比如保存失败了）不能被磁盘上的旧版本盖掉。这几篇的 diskModified 不更新：
+            // 磁盘上的要是在别处改过，保存时才认得出来
             var loaded = snapshot.notes
             for note in notes where dirty.contains(note.id) {
                 if let k = loaded.firstIndex(where: { $0.id == note.id }) {
@@ -201,6 +206,37 @@ public final class AppModel {
         }
     }
 
+    /// 「我的笔记」里有文件变了（文件监听报来的绝对路径）。是别的程序改的（VS Code、Finder、git），就重新读一遍；
+    /// 是 App 自己刚写的（文件的修改时间和大小和内存里一样）就不管，免得每存一次都重读。返回是否重新读了。
+    @discardableResult
+    public func filesChanged(_ paths: [String]) -> Bool {
+        let root = store.root.standardizedFileURL.path
+        guard paths.contains(where: { isExternalChange(at: $0, root: root) }) else { return false }
+        reload()
+        return true
+    }
+
+    private func isExternalChange(at full: String, root: String) -> Bool {
+        let path = URL(fileURLWithPath: full).standardizedFileURL.path
+        guard path.hasPrefix(root + "/") else { return false }
+        let relative = String(path.dropFirst(root.count + 1))
+        let parts = relative.split(separator: "/")
+        // 隐藏文件（.bettermd 里的状态、改名时的临时名字、.DS_Store）和「附件」不影响笔记
+        if parts.contains(where: { $0.hasPrefix(".") }) || parts.first == Substring(LibraryLayout.attachments) { return false }
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        let exists = fm.fileExists(atPath: path, isDirectory: &isDirectory)
+        if relative.lowercased().hasSuffix(".md") && !isDirectory.boolValue {
+            guard let note = notes.first(where: { $0.path == relative }) else { return exists } // 外面新建的
+            guard exists else { return true } // 外面删掉或挪走的
+            let modified = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            return modified != (diskModified[note.id] ?? note.modified)
+        }
+        // 文件夹：外面新建了、删掉了
+        if relative == LibraryLayout.trash { return false }
+        return exists && isDirectory.boolValue ? !folders.contains(relative) : folders.contains(relative)
+    }
+
     /// 回到 App 时重新读一遍（别的程序可能改过文件）。先把没保存的写下去。
     public func reload() {
         flushPendingSave()
@@ -208,9 +244,16 @@ public final class AppModel {
     }
 
     /// 换一个目录当「我的笔记」。
-    public func switchLibrary(to root: URL) {
+    @discardableResult
+    public func switchLibrary(to root: URL) -> Bool {
         finishAll()
+        // 有存不下去的改动就不换：换了以后内存清空，这些改动就找不回来了
+        guard dirty.isEmpty else {
+            lastError = "有 \(dirty.count) 篇笔记的改动没能存下（\(lastError ?? "保存失败")），先不换笔记库。改动还在 App 里，问题解决后再换。"
+            return false
+        }
         store = NoteStore(root: root)
+        diskModified = [:]
         notes = []
         folders = []
         state = LibraryState()
@@ -219,6 +262,7 @@ public final class AppModel {
         titleWhenOpened = [:]
         leftTitles = [:]
         load()
+        return true
     }
 
     /// 退出 App、换笔记库之前：存下所有改动，正在看的这篇标题改过就改文件名。
@@ -228,6 +272,20 @@ public final class AppModel {
             if let note = notes.first(where: { $0.id == id }) { titleWhenOpened[id] = note.parsed.title }
         }
         flushPendingSave()
+    }
+
+    /// 退出时还有存不下去的笔记（比如文件夹没了写权限）：每篇另存一份到 `dir`，返回存下的文件。
+    /// 退出拦不住，这是最后一道保险。
+    @discardableResult
+    public func rescueUnsaved(into dir: URL, now: Date = .now) -> [URL] {
+        let unsaved = notes.filter { dirty.contains($0.id) }
+        guard !unsaved.isEmpty, (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil
+        else { return [] }
+        let stamp = NoteStore.timestamp(now)
+        return unsaved.compactMap { note in
+            let target = LibraryLayout.uniqueURL(in: dir, base: LibraryLayout.fileName(forTitle: "\(note.title)（\(stamp)）"))
+            return (try? Data(note.text.utf8).write(to: target, options: .atomic)) != nil ? target : nil
+        }
     }
 
     // MARK: - 编辑
@@ -277,6 +335,7 @@ public final class AppModel {
             let note = try store.createNote(text: LibraryIndex.newNoteText(for: scope),
                                             inFolder: LibraryIndex.folderForNewNote(in: scope))
             notes.append(note)
+            diskModified[note.id] = note.modified
             query = ""
             tagFilter = nil
             select(note.id)
@@ -364,6 +423,7 @@ public final class AppModel {
             let before = notes[i]
             let after = try operation(before)
             notes[i] = after
+            diskModified[id] = after.modified
             if !after.isTrashed && !after.folder.isEmpty { ensureFolderListed(after.folder) }
             state.record(from: before, to: after)
             saveState()
@@ -406,11 +466,24 @@ public final class AppModel {
     private func save(_ id: Note.ID) {
         guard let i = index(of: id) else { return }
         do {
+            try keepOutsideVersion(of: i)
             notes[i].modified = try store.write(notes[i])
+            diskModified[id] = notes[i].modified
         } catch {
             dirty.insert(id)
             lastError = "保存失败：\(error.localizedDescription)。改动还在 App 里，之后会再试。"
         }
+    }
+
+    /// 磁盘上的这篇在别处也改过（修改时间和上次读、写时不一样，内容也不一样）：先把别处的版本另存一份，再存这里的。
+    private func keepOutsideVersion(of i: Int) throws {
+        let note = notes[i]
+        let url = store.url(for: note.path)
+        guard let known = diskModified[note.id],
+              let current = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+              current != known, let outside = store.readText(url), outside != note.text else { return }
+        let copy = try store.saveCopy(outside, besides: note, suffix: "别处的版本")
+        lastError = "「\(note.title)」在别处也改过（可能是 VS Code 或别的程序）。这里的改动照常保存；别处的版本另存成了「\(copy)」，在同一个文件夹里。"
     }
 
     private func saveState() {

@@ -357,6 +357,49 @@ await key('Enter', 'Enter', META, undefined, 13);
 check('⌘↩ 请 App 把焦点交给笔记列表', await run('window.sent.some(m => m.type === "focusList")'));
 check('⌘↩ 不往正文里加空行', (await doc()) === '苹果 香蕉 苹果');
 
+// ---- 合作者审查（2026-10-17）找到的问题 ----
+// 选中文字粘贴附件，App 还没存好时换了笔记：原来那篇不能少字
+await run(`window.slowAttach = true; window.webkit.messageHandlers.bettermd.postMessage = m => { window.sent.push(m);
+  return m.type === 'attach' ? new Promise(r => setTimeout(() => r({ link: '附件/x.png' }), 500)) : Promise.resolve(null); }; true`);
+const pastePNG = `(() => { const dt = new DataTransfer();
+  const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+  dt.items.add(new File([bytes], 'image.png', { type: 'image/png' }));
+  window.bettermd.view.contentDOM.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); })()`;
+await setDoc('R1', 'hello world');
+await run('window.sent = []');
+await run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: 0, head: 5 } }); })()`);
+await run(pastePNG);
+await delay(50);
+await setDoc('R2', '另一篇');
+await delay(800);
+const toR1 = await run('window.sent.filter(m => m.type === "change" && m.id === "R1").map(m => m.text)');
+check('粘贴附件时换了笔记，原来那篇不少字', toR1.every(t => t === 'hello world'), JSON.stringify(toR1));
+check('换过去的那篇也没插进附件', (await doc()) === '另一篇', JSON.stringify(await doc()));
+
+// 附件没存成（App 回了空）：选中的字原样
+await run(`window.webkit.messageHandlers.bettermd.postMessage = m => { window.sent.push(m); return Promise.resolve(null); }; true`);
+await setDoc('R3', 'hello world');
+await run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: 0, head: 5 } }); })()`);
+await run(pastePNG);
+await delay(300);
+check('附件没存成时，选中的字不会被删', (await doc()) === 'hello world', JSON.stringify(await doc()));
+
+// 附件存好了：选中的字换成链接，一步完成，⌘Z 一次就整个撤回
+await run(`window.webkit.messageHandlers.bettermd.postMessage = m => { window.sent.push(m);
+  return Promise.resolve(m.type === 'attach' ? { link: '附件/x.png' } : null); }; true`);
+await run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: 0, head: 5 } }); })()`);
+await run(pastePNG);
+await delay(300);
+check('选中的字换成了附件', (await doc()).startsWith('![](附件/x.png)') && !(await doc()).includes('hello'), JSON.stringify(await doc()));
+await key('z', 'KeyZ', META);
+check('⌘Z 一次就恢复原样', (await doc()) === 'hello world', JSON.stringify(await doc()));
+
+// 公式块结尾的 $$ 后面还有字：那些字照常显示，不跟着公式藏起来
+await setDoc('M2', '开头\n\n$$\nx^2\n$$ 是平方\n\n结尾');
+await atText('结尾');
+await delay(200);
+check('公式块结尾行后面的字照常显示', (await run('document.querySelector(".cm-content").textContent')).includes('是平方'));
+
 check('页面没有报错', pageErrors.length === 0, pageErrors.join(' | '));
 console.log(failures ? `\n${failures} 项没通过` : '\n全部通过');
 quit(failures ? 1 : 0);
