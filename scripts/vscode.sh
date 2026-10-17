@@ -8,7 +8,7 @@ npm --prefix editor run build
 rm -rf vscode/media/editor
 mkdir -p vscode/media build
 cp -R editor/dist vscode/media/editor
-node --test vscode/test/lib.test.js > /dev/null
+node --test vscode/test/lib.test.js vscode/test/notes.test.js vscode/test/library.test.js > /dev/null
 
 (cd vscode && npx --yes @vscode/vsce@3 package --no-dependencies --allow-missing-repository --skip-license -o ../build/bettermd.vsix)
 

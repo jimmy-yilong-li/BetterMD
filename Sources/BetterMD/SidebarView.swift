@@ -39,7 +39,8 @@ struct SidebarView: View {
 
     /// 只在侧栏自己有焦点、没在输入文件夹名字时处理按键；否则交给输入框。
     private func handle(_ action: () -> SidebarNavigation.Action?) -> KeyPress.Result {
-        guard focused, window.folderEdit == nil else { return .ignored }
+        // 侧栏收起来了（⌥⌘S）还可能留着焦点：这时 ↑↓ 会在看不见的地方换范围，不接
+        guard focused, window.folderEdit == nil, window.sidebarShown else { return .ignored }
         if let action = action() { perform(action) }
         return .handled
     }

@@ -1,6 +1,23 @@
 import Foundation
 
 /// 一篇笔记，对应「我的笔记」里的一个 .md 文件。
+/// 磁盘上这篇笔记的文件，上次读进来或写下去时的样子。
+/// 用来判断文件后来有没有被别的程序改过（Note.modified 打字时就变了，不能拿来比）：
+/// 时间和字节数都没变，就不用重读；内容的指纹变了，才是真的被改过（只碰了修改时间的不算）。
+public struct DiskStamp: Hashable, Sendable {
+    public var modified: Date
+    /// 文件的字节数（不是正文的 UTF-8 字节数：\r\n、GB18030、BOM 的文件两者不一样）
+    public var size: Int
+    /// 正文（按 \n 换行）的指纹
+    public var textHash: Int
+
+    public init(modified: Date, size: Int, text: String) {
+        self.modified = modified
+        self.size = size
+        self.textHash = text.hashValue
+    }
+}
+
 public struct Note: Identifiable, Hashable, Sendable {
     public let id: UUID
     /// 相对「我的笔记」的路径，用“/”分隔，比如“工作/计划.md”；废纸篓里的是“废纸篓/计划.md”。
@@ -14,19 +31,21 @@ public struct Note: Identifiable, Hashable, Sendable {
     public var isPinned: Bool
     /// 在废纸篓里时，原来所在的文件夹（“”是未分类）。
     public var originalFolder: String?
+    /// 磁盘上的文件上次读、写时的样子；还没读写过（刚在内存里建的）是 nil。
+    public var disk: DiskStamp?
 
     public init(
         id: UUID = UUID(), path: String, text: String, created: Date, modified: Date,
-        isPinned: Bool = false, originalFolder: String? = nil
+        isPinned: Bool = false, originalFolder: String? = nil, disk: DiskStamp? = nil
     ) {
         self.init(id: id, path: path, text: text, parsed: ParsedNote(text: text), created: created,
-                  modified: modified, isPinned: isPinned, originalFolder: originalFolder)
+                  modified: modified, isPinned: isPinned, originalFolder: originalFolder, disk: disk)
     }
 
     /// 正文已经解析过时用这个，免得重复解析（几千篇笔记时，解析是读取笔记库的主要开销）。
     /// `parsed` 必须是这段 `text` 的解析结果。
     init(id: UUID, path: String, text: String, parsed: ParsedNote, created: Date, modified: Date,
-         isPinned: Bool, originalFolder: String?) {
+         isPinned: Bool, originalFolder: String?, disk: DiskStamp?) {
         self.id = id
         self.path = path
         self.text = text
@@ -35,6 +54,7 @@ public struct Note: Identifiable, Hashable, Sendable {
         self.modified = modified
         self.isPinned = isPinned
         self.originalFolder = originalFolder
+        self.disk = disk
     }
 
     public var isTrashed: Bool { path.hasPrefix(LibraryLayout.trash + "/") }
@@ -53,7 +73,7 @@ public struct Note: Identifiable, Hashable, Sendable {
     /// 同一篇笔记换一个 id（重新扫描目录时沿用旧 id）。
     public func withID(_ id: UUID) -> Note {
         Note(id: id, path: path, text: text, parsed: parsed, created: created, modified: modified,
-             isPinned: isPinned, originalFolder: originalFolder)
+             isPinned: isPinned, originalFolder: originalFolder, disk: disk)
     }
 
     /// “工作/BetterMD/a.md” → “工作/BetterMD”；“a.md” → “”。

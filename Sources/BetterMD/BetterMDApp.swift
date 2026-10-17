@@ -5,6 +5,8 @@ import SwiftUI
 @main
 struct BetterMDApp: App {
     @State private var model: AppModel
+    /// 退出、关窗口时存下所有改动（见 AppDelegate）
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     init() {
         // 用 swift run 直接启动时也要像普通 App 一样出现在程序坞里。
@@ -23,6 +25,7 @@ struct BetterMDApp: App {
                 .environment(model)
                 .frame(minWidth: 960, minHeight: 600)
                 .task {
+                    delegate.model = model
                     model.load()
                     NSApplication.shared.activate()
                     await DebugSnapshot.runIfRequested(model: model)

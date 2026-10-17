@@ -22,7 +22,17 @@ public enum LibraryLayout {
         if name.count > 80 {
             name = String(name.prefix(80)).trimmingCharacters(in: .whitespaces)
         }
+        // 文件名最长 255 个字节：80 个汉字是 240 字节，正好；全是 emoji 的长标题 80 个字会超过。留出“ 2.md”这类后缀的位置
+        while name.utf8.count > 240 { name.removeLast() }
         return name.isEmpty ? "无标题" : name
+    }
+
+    /// 标题加一个后缀（比如“（别处的版本）”）的文件名：标题太长时截标题，后缀保留。
+    public static func fileName(forTitle title: String, suffix: String) -> String {
+        var base = fileName(forTitle: title)
+        let room = 240 - fileName(forTitle: suffix).utf8.count
+        while base.utf8.count > room, !base.isEmpty { base.removeLast() }
+        return base.trimmingCharacters(in: .whitespaces) + suffix
     }
 
     /// `dir` 里第一个没被占用的名字：`base.ext`、`base 2.ext`、`base 3.ext`……

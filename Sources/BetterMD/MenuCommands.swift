@@ -154,6 +154,8 @@ struct BetterMDCommands: Commands {
 
     private func editor(_ command: String) {
         guard !blockedBySheet else { return }
+        // 在搜索框、文件夹名字这类输入框里按的格式键，不去改笔记（还会把焦点抢走、把新建文件夹取消掉）
+        if let field = NSApp.keyWindow?.firstResponder as? NSTextView, field.isFieldEditor { return }
         NotificationCenter.default.post(name: .editorCommand, object: command)
     }
 
@@ -189,8 +191,8 @@ struct BetterMDCommands: Commands {
         panel.message = "选一个文件夹当「我的笔记」"
         panel.directoryURL = LibraryLocation.current
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        LibraryLocation.current = url
-        model.switchLibrary(to: url)
+        // 换成了才记下：换不成（有改动没存下）时还记下的话，下次启动就打开了另一个库
+        if model.switchLibrary(to: url) { LibraryLocation.current = url }
     }
 }
 

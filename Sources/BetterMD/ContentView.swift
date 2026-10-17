@@ -69,30 +69,18 @@ struct ContentView: View {
             window.requestSearchFocus()
         }
         .sheet(isPresented: Bindable(window).showShortcuts) { ShortcutsView() }
-        .alert("出了点问题", isPresented: errorShown) {
-            Button("知道了") { model.lastError = nil }
-        } message: {
-            Text(model.lastError ?? "")
-        }
+        .overlay(alignment: .bottom) { NoticeBar() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.reload()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
             model.flushPendingSave()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            model.finishAll()
-            model.rescueUnsaved(into: RescueFolder.url)
-        }
         .task { RescueFolder.announce(to: model) }
         .task(id: model.store.root) {
             watcher?.stop()
-            watcher = LibraryWatcher(root: model.store.root) { paths in model.filesChanged(paths) }
+            watcher = LibraryWatcher(root: model.store.root) { paths, rescan in model.filesChanged(paths, mustRescan: rescan) }
         }
-    }
-
-    private var errorShown: Binding<Bool> {
-        Binding(get: { model.lastError != nil }, set: { if !$0 { model.lastError = nil } })
     }
 }
 
@@ -103,12 +91,14 @@ enum RescueFolder {
         return support.appendingPathComponent("BetterMD/没存下的笔记", isDirectory: true)
     }
 
+    /// 有没提醒过的文件就提醒。按文件名记“提醒过”（只记个数的话，用户拷回去、删掉旧的以后，新的就再也不提醒了）。
     @MainActor
     static func announce(to model: AppModel) {
         let files = (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.filter { $0.hasSuffix(".md") } ?? []
-        let seen = UserDefaults.standard.integer(forKey: "rescuedNotesSeen")
-        guard files.count > seen else { return }
-        UserDefaults.standard.set(files.count, forKey: "rescuedNotesSeen")
-        model.lastError = "上次退出时有笔记没能存进「我的笔记」，另存在了 \(url.path)，一共 \(files.count) 个文件，可以在 Finder 里打开拷回去。"
+        let seen = Set(UserDefaults.standard.stringArray(forKey: "rescuedNotesAnnounced") ?? [])
+        let new = files.filter { !seen.contains($0) }
+        guard !new.isEmpty else { return }
+        UserDefaults.standard.set(Array(seen.union(new).intersection(files)), forKey: "rescuedNotesAnnounced")
+        model.lastError = "上次退出时有 \(new.count) 篇笔记没能存进「我的笔记」，另存在了 \(url.path)，可以在 Finder 里打开拷回去。"
     }
 }

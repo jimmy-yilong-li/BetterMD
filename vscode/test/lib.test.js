@@ -38,7 +38,7 @@ test('找笔记库：往上找带 .bettermd 的文件夹', () => {
 test('附件起名：图片按时间，别的保留原名，重名加序号', () => {
   const now = new Date(2026, 9, 17, 15, 30, 12);
   assert.equal(lib.attachmentName('截图.PNG', 'image/png', now), '20261017-153012.png');
-  assert.equal(lib.attachmentName('', 'image/jpeg', now), '20261017-153012.jpg');
+  assert.equal(lib.attachmentName('', 'image/jpeg', now), '20261017-153012.jpeg');
   assert.equal(lib.attachmentName('报告 v2.pdf', 'application/pdf', now), '报告 v2.pdf');
   const taken = new Set(['20261017-153012.png', '20261017-153012-2.png']);
   assert.equal(lib.attachmentName('a.png', 'image/png', now, n => taken.has(n)), '20261017-153012-3.png');

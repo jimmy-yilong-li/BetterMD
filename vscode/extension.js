@@ -6,6 +6,7 @@ const vscode = require('vscode');
 const fs = require('node:fs');
 const path = require('node:path');
 const lib = require('./lib.js');
+const library = require('./library.js');
 
 const VIEW_TYPE = 'bettermd.editor';
 
@@ -23,6 +24,7 @@ function activate(context) {
     vscode.commands.registerCommand('bettermd.openInBetterMD', uri => openWith(uri, VIEW_TYPE)),
     vscode.commands.registerCommand('bettermd.insertFile', () => provider.active?.insertFiles()),
   );
+  library.register(context);
 }
 
 /** 换一种方式打开当前文件：'default' 是 VS Code 的文本编辑器（看源码）。 */
@@ -43,6 +45,7 @@ class Provider {
     const track = () => {
       if (panel.active) this.active = session;
       else if (this.active === session) this.active = null;
+      if (!panel.active && session.focused) session.setFocus(false, false); // 切到别的标签了
     };
     track();
     panel.onDidChangeViewState(track);
@@ -67,6 +70,10 @@ class Session {
     this.lastSeq = 0;
     /** 编辑器里现在的正文（最后一次收到或送进去的） */
     this.editorText = null;
+    /** 编辑器手里那一版的来历：打开时送进去的，或者编辑器最后发来的。编辑器拒收送进去的另一版时拿它判断那一版是不是别处改的 */
+    this.editorBase = null;
+    /** 文档在插件上一次写进去（或送进编辑器）以后的样子。写之前对一下：变了就是外面改过 */
+    this.docText = null;
     /** 还没写完的改动有几次；写的过程中文档会变，那些变化是自己的，不用送回编辑器 */
     this.pending = 0;
     this.chain = Promise.resolve();
@@ -88,6 +95,7 @@ class Session {
 
   dispose() {
     clearTimeout(this.saveTimer);
+    if (this.focused) this.setFocus(false, false);
     // 关标签时还有没存的改动：开着自动保存就直接存下，不弹“要不要保存”
     if (this.document.isDirty && this.autoSave) this.document.save();
     this.disposables.forEach(d => d.dispose());
@@ -132,11 +140,14 @@ class Session {
     try {
       switch (message.type) {
         case 'ready':
+          // 网页重新加载过（重新加载网页视图、标签拖到新窗口）：编号从头算，编辑器手里那一版也重新算（和 App 一样）
+          this.lastSeq = 0;
+          this.editorBase = null;
           if (this.place) this.call('setLibraryBase', this.panel.webview.asWebviewUri(vscode.Uri.file(this.place.root)).toString());
           this.push();
           break;
         case 'change':
-          this.fromEditor(message.text, message.seq);
+          this.fromEditor(message.text, message.seq, message.overrode === true);
           break;
         case 'attach':
           value = this.saveAttachment(Buffer.from(message.data, 'base64'), message.name, message.mime);
@@ -146,6 +157,9 @@ class Session {
           break;
         case 'tag':
           vscode.commands.executeCommand('workbench.action.findInFiles', { query: '#' + message.name, triggerSearch: true });
+          break;
+        case 'focus':
+          this.setFocus(message.editor === true, message.find === true);
           break;
       }
     } catch (error) {
@@ -159,6 +173,8 @@ class Session {
   push() {
     const text = lib.normalize(this.document.getText());
     this.editorText = text;
+    this.docText = text;
+    if (this.editorBase === null) this.editorBase = text;
     const stat = this.isFile ? fs.statSync(this.document.uri.fsPath, { throwIfNoEntry: false }) : null;
     this.call('setDocument', this.id, text, {
       dir: this.place?.dir ?? '',
@@ -176,8 +192,17 @@ class Session {
     return [path.basename(root), ...dir.split('/').filter(Boolean)].join(' / ');
   }
 
-  /** 编辑器里改了：写进文档。连着改好几次时，每次都按最新的正文写，中间的自然跳过。 */
-  fromEditor(text, seq) {
+  /**
+   * 编辑器里改了：写进文档。连着改好几次时，每次都按最新的正文写，中间的自然跳过。
+   * overrode：编辑器拒收了送进去的另一版（它有更新的字没送到、输入法在拼字），重发了自己的。
+   * 那一版要是编辑器没见过的（别处改的），先放进一个新标签留着，不能悄悄丢掉。
+   */
+  fromEditor(text, seq, overrode = false) {
+    if (overrode) {
+      const rejected = lib.normalize(this.document.getText());
+      if (rejected !== text && this.editorBase !== null && rejected !== this.editorBase) this.keepRejected(rejected);
+    }
+    this.editorBase = text;
     this.lastSeq = Math.max(this.lastSeq, seq ?? 0);
     this.editorText = text;
     this.pending++;
@@ -192,14 +217,37 @@ class Session {
   }
 
   async applyLatest() {
-    const current = lib.normalize(this.document.getText());
-    const edit = lib.minimalEdit(current, this.editorText);
-    if (!edit) return;
-    const start = lib.positionAt(current, edit.from);
-    const end = lib.positionAt(current, edit.to);
-    const workspaceEdit = new vscode.WorkspaceEdit();
-    workspaceEdit.replace(this.document.uri, new vscode.Range(start.line, start.character, end.line, end.character), edit.text);
-    if (await vscode.workspace.applyEdit(workspaceEdit)) this.scheduleSave();
+    // 写的同时文档在外面变了（版本对不上），VS Code 会拒收这次修改：按文档现在的样子重算再写，最多试 5 次
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const current = lib.normalize(this.document.getText());
+      // 上次写完以后文档在外面又被改过（插件还没来得及把它送进编辑器）：照编辑器的写会把它抹掉，先留一份
+      if (this.docText !== null && current !== this.docText && current !== this.editorText) this.keepRejected(current);
+      this.docText = current;
+      const target = this.editorText;
+      const edit = lib.minimalEdit(current, target);
+      if (!edit) return;
+      const start = lib.positionAt(current, edit.from);
+      const end = lib.positionAt(current, edit.to);
+      const workspaceEdit = new vscode.WorkspaceEdit();
+      workspaceEdit.replace(this.document.uri, new vscode.Range(start.line, start.character, end.line, end.character), edit.text);
+      if (await vscode.workspace.applyEdit(workspaceEdit)) {
+        this.docText = target;
+        this.scheduleSave();
+        return;
+      }
+    }
+    // 一直写不进去：多半是只读的文件。编辑器里的字留着，告诉用户一次
+    if (!this.warnedReadOnly) {
+      this.warnedReadOnly = true;
+      vscode.window.showWarningMessage(`「${path.basename(this.document.uri.fsPath)}」写不进去（可能是只读的文件），这里打的字还没存下。`);
+    }
+  }
+
+  /** 编辑器网页报来焦点在哪：快捷键只在焦点真的在编辑器里时才拦（侧栏里的 Claude Code 这类网页不受影响）。 */
+  setFocus(editor, find) {
+    this.focused = editor;
+    vscode.commands.executeCommand('setContext', 'bettermd.editorFocused', editor);
+    vscode.commands.executeCommand('setContext', 'bettermd.findFocused', editor && find);
   }
 
   /** 文档在外面变了（App 存了、git、别的编辑器）：送进编辑器。自己写进去的改动不算。 */
@@ -209,10 +257,28 @@ class Session {
     this.push();
   }
 
+  /** 别处改的、被编辑器里的改动盖掉的那一版：放进旁边一个新标签（没存的文档），并告诉用户。 */
+  async keepRejected(text) {
+    const name = path.basename(this.document.uri.fsPath || this.document.uri.path);
+    const copy = await vscode.workspace.openTextDocument({ language: 'markdown', content: text });
+    await vscode.window.showTextDocument(copy, { preview: false, viewColumn: vscode.ViewColumn.Beside, preserveFocus: true });
+    vscode.window.showWarningMessage(`「${name}」在别处也改过。编辑器里的改动照常保存；别处的那一版放在旁边的新标签里，需要的话自己合并。`);
+  }
+
   scheduleSave() {
     if (!this.autoSave) return;
     clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => { if (this.document.isDirty) this.document.save(); }, 600);
+    this.saveTimer = setTimeout(() => this.save(), 600);
+  }
+
+  /**
+   * 自动保存。这个标签在前台时用“保存但不格式化”：插件自己调 document.save() 算手动保存，
+   * 会触发保存时格式化、保存时修正（Prettier、markdownlint、删末尾空行），正在打的字会被改掉。
+   */
+  async save() {
+    if (!this.document.isDirty) return;
+    if (this.panel.active) await vscode.commands.executeCommand('workbench.action.files.saveWithoutFormatting');
+    else await this.document.save();
   }
 
   /**
@@ -252,9 +318,10 @@ class Session {
       return;
     }
     if (!linkPath || !this.place) return;
+    // 本机的文件都在 VS Code 里打开（.md 用 BetterMD，图片、PDF 用 VS Code 自己的预览）：
+    // 交给系统打开的话，链接指着 .command、.app 就会直接运行（克隆来的仓库里的链接不可信）
     const file = vscode.Uri.file(path.join(this.place.root, ...linkPath.split('/')));
-    if (/\.(md|markdown)$/i.test(file.fsPath)) vscode.commands.executeCommand('vscode.open', file);
-    else vscode.env.openExternal(file);
+    vscode.commands.executeCommand('vscode.open', file);
   }
 }
 

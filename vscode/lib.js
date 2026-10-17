@@ -5,21 +5,29 @@ const path = require('node:path');
 
 const ATTACHMENTS = '附件';
 const META = '.bettermd';
-const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tif', 'tiff', 'bmp', 'svg', 'avif']);
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tif', 'tiff', 'bmp', 'svg', 'avif', 'ico', 'icns', 'psd', 'jp2', 'exr', 'dng']);
 
 /** Windows 的 \r\n 和老式的 \r 都当成 \n（编辑器里只有 \n）。 */
 function normalize(text) {
   return text.includes('\r') ? text.replace(/\r\n?/g, '\n') : text;
 }
 
-/** 把 a 改成 b 最少要换掉哪一段：a 里 [from, to) 换成 text。两边一样返回 null。 */
+const isHighSurrogate = c => c >= 0xD800 && c <= 0xDBFF;
+const isLowSurrogate = c => c >= 0xDC00 && c <= 0xDFFF;
+
+/**
+ * 把 a 改成 b 最少要换掉哪一段：a 里 [from, to) 换成 text。两边一样返回 null。
+ * 不从 emoji（还有扩展区的生僻字）这种占两个位置的字中间切开：VS Code 会把这样的范围扩到整个字，多删掉半个，文件里就有了坏字。
+ */
 function minimalEdit(a, b) {
   if (a === b) return null;
   let start = 0;
   const max = Math.min(a.length, b.length);
   while (start < max && a.charCodeAt(start) === b.charCodeAt(start)) start++;
+  if (start > 0 && isHighSurrogate(a.charCodeAt(start - 1))) start--;
   let endA = a.length, endB = b.length;
   while (endA > start && endB > start && a.charCodeAt(endA - 1) === b.charCodeAt(endB - 1)) { endA--; endB--; }
+  if (endA < a.length && isLowSurrogate(a.charCodeAt(endA))) { endA++; endB++; }
   return { from: start, to: endA, text: b.slice(start, endB) };
 }
 
@@ -59,7 +67,8 @@ function placeOf(file, workspaceFolders = [], isDirectory) {
 function attachmentName(fileName, mime, now = new Date(), exists = () => false) {
   const parsed = path.parse(fileName || '');
   let ext = parsed.ext.replace(/^\./, '').toLowerCase();
-  if (!ext && mime?.startsWith('image/')) ext = mime.slice(6).replace('jpeg', 'jpg').replace(/\+.*$/, '');
+  // 和 App 一样按系统给的扩展名：image/jpeg 是 jpeg，image/svg+xml 是 svg
+  if (!ext && mime?.startsWith('image/')) ext = mime.slice(6).replace(/\+.*$/, '');
   const image = ext ? IMAGE_EXT.has(ext) : !!mime?.startsWith('image/');
   const pad = n => String(n).padStart(2, '0');
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;

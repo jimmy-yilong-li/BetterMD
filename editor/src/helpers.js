@@ -42,7 +42,8 @@ export function splitRow(line) {
   let cell = '';
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
-    if (ch === '\\' && s[i + 1] === '|') { cell += '\\|'; i++; continue; }
+    // 格子里的 \| 就是一个 |（GFM 的规则：先换掉再排版，行内代码里也一样）
+    if (ch === '\\' && s[i + 1] === '|') { cell += '|'; i++; continue; }
     if (ch === '|') { cells.push(cell.trim()); cell = ''; continue; }
     cell += ch;
   }

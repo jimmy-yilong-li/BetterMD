@@ -450,3 +450,6 @@ body::before {
 #editor .cm-search button[name=close]:hover { background: var(--field); color: var(--text); }
 #editor .cm-searchMatch { background: color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 2px; }
 #editor .cm-searchMatch-selected { background: color-mix(in srgb, var(--accent) 34%, transparent); }
+
+/* 编号列表里的待办：序号在方框前面 */
+#editor .cm-list-task .cm-task-number { margin-right: .35em; }

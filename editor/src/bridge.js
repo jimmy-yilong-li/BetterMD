@@ -10,6 +10,14 @@ const waiting = new Map();
 let nextRequest = 0;
 
 if (vscode) {
+  // 告诉插件焦点在不在编辑器里、在不在查找栏里：插件只在焦点真的在这里时才拦 VS Code 的快捷键
+  const reportFocus = () => vscode.postMessage({
+    type: 'focus', editor: document.hasFocus(), find: !!document.activeElement?.closest?.('.cm-panels'),
+  });
+  window.addEventListener('focus', reportFocus);
+  window.addEventListener('blur', reportFocus);
+  document.addEventListener('focusin', reportFocus);
+  document.addEventListener('focusout', () => setTimeout(reportFocus));
   window.addEventListener('message', event => {
     const m = event.data;
     if (m?.type === 'reply') {

@@ -76,6 +76,7 @@ struct EditorView: View {
             .onChange(of: window.paneRequest) { _, request in
                 if request.pane == .editor && note != nil { handle.focusEditor() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .editorReady)) { _ in handle.setFocusMode(window.focusMode) }
             .onReceive(NotificationCenter.default.publisher(for: .editorCommand)) { message in
                 guard let command = message.object as? String, note != nil else { return }
                 if command == "insertFile" { chooseFiles() } else { handle.format(command) }

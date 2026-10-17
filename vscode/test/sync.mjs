@@ -26,21 +26,34 @@ class Uri {
 class Range { constructor(l1, c1, l2, c2) { this.start = { line: l1, character: c1 }; this.end = { line: l2, character: c2 }; } }
 class WorkspaceEdit { constructor() { this.edits = []; } replace(uri, range, text) { this.edits.push({ uri, range, text }); } }
 const opened = [];
+const kept = []; // 插件放进新标签留着的“别处的版本”
 const fakeVscode = {
   Uri, Range, WorkspaceEdit,
+  ViewColumn: { Beside: -2 },
   workspace: {
     workspaceFolders: [],
     getConfiguration: () => ({ get: (_k, fallback) => fallback }),
     onDidChangeTextDocument: listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) }; },
+    openTextDocument: async ({ content }) => { kept.push(content); return { content }; },
     applyEdit: async edit => {
+      // 和真的 VS Code 一样：调用时记下文档的版本，真写进去时版本变了（中间被别处改过）就拒收，返回 false
+      const versions = edit.edits.map(e => documents.get(e.uri.fsPath).version);
       await delay(applyDelay); // 真的 VS Code 里写进文档也要一点时间：故意慢一点，看连着打字时会不会丢字
+      if (edit.edits.some((e, i) => documents.get(e.uri.fsPath).version !== versions[i])) return false;
       for (const { uri, range, text } of edit.edits) documents.get(uri.fsPath).replace(range, text);
       return true;
     },
   },
-  window: { showErrorMessage: m => errors.push(m), showOpenDialog: async () => [] },
-  env: { openExternal: u => opened.push(u.toString()) },
-  commands: { executeCommand: (...args) => opened.push(args.join(' ')) },
+  window: { showErrorMessage: m => errors.push(m), showOpenDialog: async () => [], showTextDocument: async () => {}, showWarningMessage: () => {} },
+  env: { openExternal: u => opened.push('openExternal ' + u.toString()) },
+  commands: {
+    executeCommand: async (...args) => {
+      if (args[0] === 'setContext') { contexts[args[1]] = args[2]; return; }
+      // “保存但不格式化”：存当前标签的文档，不跑保存时的格式化、修正
+      if (args[0] === 'workbench.action.files.saveWithoutFormatting') { await tab?.doc.save(SKIP_PARTICIPANTS); return; }
+      opened.push(args.map(String).join(' '));
+    },
+  },
 };
 const Module = require('node:module');
 const originalLoad = Module._load;
@@ -49,10 +62,13 @@ const { Session } = require('../extension.js');
 
 let applyDelay = 5;
 const errors = [];
+const contexts = {};
+const SKIP_PARTICIPANTS = 'skip';
+const isHigh = c => c >= 0xD800 && c <= 0xDBFF;
 
 /** 假的文本文档：可以用 \r\n 换行（和 VS Code 一样，插进来的 \n 会换成文档自己的换行）。 */
 class FakeDocument {
-  constructor(file, text) { this.uri = Uri.file(file); this.text = text; this.isDirty = false; this.isClosed = false; this.saves = 0; }
+  constructor(file, text) { this.uri = Uri.file(file); this.text = text; this.isDirty = false; this.isClosed = false; this.saves = 0; this.version = 1; }
   get eol() { return this.text.includes('\r\n') ? '\r\n' : '\n'; }
   getText() { return this.text; }
   offsetAt({ line, character }) {
@@ -60,19 +76,39 @@ class FakeDocument {
     for (let l = 0; l < line; l++) offset = this.text.indexOf('\n', offset) + 1;
     return offset + character;
   }
+  /** 和 VS Code 的 TextModel.validateRange 一样：范围的两头不能落在 emoji 这种两个位置的字中间，落在中间就往外扩 */
+  validate(from, to) {
+    const t = this.text;
+    const startInside = from > 0 && from < t.length && isHigh(t.charCodeAt(from - 1));
+    const endInside = to > 0 && to < t.length && isHigh(t.charCodeAt(to - 1));
+    if (!startInside && !endInside) return [from, to];
+    if (from === to) return [from - 1, to - 1];
+    return [startInside ? from - 1 : from, endInside ? to + 1 : to];
+  }
   replace(range, text) {
-    const from = this.offsetAt(range.start), to = this.offsetAt(range.end);
+    const [from, to] = this.validate(this.offsetAt(range.start), this.offsetAt(range.end));
     const insert = this.eol === '\r\n' ? text.replace(/\r?\n/g, '\r\n') : text;
     this.text = this.text.slice(0, from) + insert + this.text.slice(to);
     this.isDirty = true;
+    this.version++;
     for (const l of listeners) l({ document: this, contentChanges: [{}] });
   }
   /** 文件在外面被改了（比如 BetterMD App 存了一下），VS Code 重新读进来 */
   externalChange(text) {
     this.text = text;
+    this.version++;
     for (const l of listeners) l({ document: this, contentChanges: [{}] });
   }
-  async save() { this.saves++; this.isDirty = false; return true; }
+  /** 保存。插件自己调 save() 算手动保存，VS Code 会跑保存时的格式化、修正（participant）；“保存但不格式化”不跑 */
+  async save(how) {
+    this.saves++;
+    if (this.participant && how !== SKIP_PARTICIPANTS) {
+      const next = this.participant(this.text);
+      if (next !== this.text) { this.text = next; this.version++; for (const l of listeners) l({ document: this, contentChanges: [{}] }); }
+    }
+    this.isDirty = false;
+    return true;
+  }
 }
 
 // ---- 无头 Chrome ----
@@ -136,10 +172,12 @@ async function openTab(file, text) {
   return { doc, panel, session };
 }
 
-// 把网页发来的消息转给 Session（像 VS Code 那样一条条送）
+// 把网页发来的消息转给 Session（像 VS Code 那样一条条送）。paused：消息还在路上，先不送
 let tab;
+let paused = false;
 const pump = async () => {
   while (tab) {
+    if (paused) { await delay(15); continue; }
     const messages = await run('window.toHost.splice(0)').catch(() => []);
     for (const m of messages ?? []) await tab.panel.handler?.(m);
     await delay(15);
@@ -183,6 +221,8 @@ check('写得慢时连着打字不丢字', tab.doc.getText().endsWith('快快快
   JSON.stringify([tab.doc.getText(), await editorText()]));
 applyDelay = 5;
 
+check('正常打字（外面没改）时不会多出“别处的版本”', kept.length === 0, JSON.stringify(kept));
+
 // 3b. 正在写进文档时，文件在外面也改了：以编辑器为准（刚打的字不丢），最后两边一样
 applyDelay = 80;
 await type('还在打');
@@ -191,6 +231,8 @@ await type('字');
 await delay(1500);
 check('写进文档的同时外面也改了：两边最后一样，刚打的字还在', tab.doc.getText() === await editorText() && (await editorText()).includes('还在打字'),
   JSON.stringify([tab.doc.getText(), await editorText()]));
+check('外面同时改的那段没丢：要么在文档里，要么放进了新标签', tab.doc.getText().includes('（外面同时加的）') || kept.some(t => t.includes('（外面同时加的）')),
+  JSON.stringify([tab.doc.getText(), kept]));
 applyDelay = 5;
 
 // 4. 文件在外面改了：编辑器跟着变
@@ -236,6 +278,92 @@ await run(`(async () => {
 await delay(800);
 check('别处的 .md，图片存进旁边的 assets/', existsSync(join(project, 'assets')) && readdirSync(join(project, 'assets')).length === 1
   && (await editorText()).includes('](assets/'), JSON.stringify(await editorText()));
+
+
+// ---- 编辑器和插件的审查（2026-10-17）找到的问题 ----
+const project2 = mkdtempSync(join(tmpdir(), 'bettermd-proj2-'));
+const key = async (k, code, vk, modifiers = 0) => {
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, modifiers, windowsVirtualKeyCode: vk });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, modifiers });
+  await delay(60);
+};
+const cursor = pos => run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: ${pos} } }); })()`);
+
+// emoji 挨着 emoji 打字、删字：文件里不能出现坏字
+tab = null; await delay(50);
+tab = await openTab(join(project2, 'emoji.md'), 'A😀B');
+pump();
+await settle();
+await cursor(1);
+await send('Input.insertText', { text: '😃' });
+await settle();
+check('emoji 前面打 emoji：文件里没有坏字', tab.doc.getText() === 'A😃😀B' && (await editorText()) === 'A😃😀B', JSON.stringify([tab.doc.getText(), await editorText()]));
+await cursor(3);
+await key('Backspace', 'Backspace', 8);
+await settle();
+check('删掉 emoji 前面的 emoji：后面那个还在', tab.doc.getText() === 'A😀B' && (await editorText()) === 'A😀B', JSON.stringify([tab.doc.getText(), await editorText()]));
+
+// 写进文档的途中文件在外面变了（VS Code 拒收这次写入）：刚打的字不丢，外面的那一版也留着
+tab = null; await delay(50);
+kept.length = 0;
+tab = await openTab(join(project2, 'race.md'), '# 题\n\n正文');
+pump();
+await settle();
+await cursor(6);
+applyDelay = 80;
+await send('Input.insertText', { text: 'X' });
+for (let i = 0; i < 100 && tab.session.pending === 0; i++) await delay(2); // 正在写
+tab.doc.externalChange('# 题\n\n正文（App 改的）');
+await delay(1200);
+applyDelay = 5;
+check('写的途中外面改了：刚打的字还在，两边一样', (await editorText()).includes('X') && tab.doc.getText() === await editorText(), JSON.stringify([tab.doc.getText(), await editorText()]));
+check('并且外面那一版放进了新标签', kept.some(t => t.includes('（App 改的）')) || tab.doc.getText().includes('（App 改的）'), JSON.stringify(kept));
+
+// 网页重新加载过（重新加载网页视图、标签拖到新窗口）以后：两边照样对得上，刚打的字不丢
+tab = null; await delay(50);
+tab = await openTab(join(project2, 'reload.md'), '# 题\n\n正文');
+pump();
+await settle();
+await cursor(6);
+await type('一二三四五六七八九十');
+await delay(400);
+const reloaded = new Promise(ok => loaded.push(ok));
+await send('Page.reload');
+await reloaded;
+await delay(500);
+await cursor(await run('window.bettermd.view.state.doc.length'));
+paused = true;
+await send('Input.insertText', { text: 'Y' });
+await delay(50);
+tab.doc.externalChange(tab.doc.getText() + '\n\n外面加的一段');
+await delay(300);
+paused = false;
+await delay(900);
+check('网页重新加载以后：两边对得上，刚打的字还在', (await editorText()) === tab.doc.getText() && (await editorText()).includes('Y'), JSON.stringify([tab.doc.getText(), await editorText()]));
+
+// 自动保存不跑“保存时格式化”：开着删末尾空行、Prettier 这类的人，正在打的字不会被改掉
+tab = null; await delay(50);
+tab = await openTab(join(project2, 'trim.md'), '# 题\n\n第一段');
+tab.doc.participant = text => text.replace(/\n+$/, '\n').replace(/(\S) $/gm, '$1');
+pump();
+await settle();
+await cursor(await run('window.bettermd.view.state.doc.length'));
+await key('Enter', 'Enter', 13); await key('Enter', 'Enter', 13);
+await type('hello ');
+await delay(1000); // 停一下，自动保存
+await type('world');
+await delay(900);
+check('自动保存不跑保存时格式化：空行和空格都还在', (await editorText()) === '# 题\n\n第一段\n\nhello world', JSON.stringify(await editorText()));
+
+// 快捷键只在焦点真的在编辑器里时才拦：编辑器报来焦点
+await cursor(0);
+await delay(100);
+check('焦点在编辑器里时告诉插件', contexts['bettermd.editorFocused'] === true && contexts['bettermd.findFocused'] === false, JSON.stringify(contexts));
+
+// ⌘ 点本地文件的链接：在 VS Code 里打开，不交给系统（.command、.app 会直接运行）
+opened.length = 0;
+await tab.panel.handler({ type: 'open', path: 'tools/setup.command' });
+check('⌘ 点 .command 链接不会交给系统运行', opened.some(o => o.startsWith('vscode.open')) && !opened.some(o => o.includes('openExternal')), JSON.stringify(opened));
 
 check('插件没有报错', errors.length === 0, errors.join(' | '));
 check('页面没有报错', pageErrors.length === 0, pageErrors.join(' | '));

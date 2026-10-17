@@ -136,6 +136,12 @@ export class ListMarkWidget extends WidgetType {
     wrap.className = 'cm-list-mark cm-list-' + this.kind;
     wrap.style.width = this.width + 'em';
     if (this.kind === 'task') {
+      if (this.label) {
+        const number = document.createElement('span');
+        number.className = 'cm-list-glyph cm-task-number';
+        number.textContent = this.label;
+        wrap.append(number);
+      }
       const box = document.createElement('span');
       box.className = 'cm-task-box' + (this.checked ? ' is-done' : '');
       box.setAttribute('role', 'checkbox');

@@ -35,10 +35,11 @@ Bear 式的 Markdown 笔记 App，只做 macOS，笔记放在 iCloud 云盘里�
 
 ## 开发命令
 
-- 跑测试：`swift test`；编辑器（`editor/`）的测试：`npm --prefix editor test`；编辑器在真浏览器里的打字测试：`npm --prefix editor run test:browser`（先 `npm --prefix editor run build`）
+- 跑全部测试：`scripts/test.sh`（Swift、编辑器、浏览器按键、VS Code 插件，一条命令；不开窗口、不开 App、不开 VS Code）
+- 只跑一部分：`swift test`；编辑器（`editor/`）的测试：`npm --prefix editor test`；编辑器在真浏览器里的打字测试：`npm --prefix editor run test:browser`（先 `npm --prefix editor run build`）
 - 打包成 App：`scripts/bundle.sh`（默认 release；先打包编辑器网页，再编译 Swift；产物在 `build/BetterMD.app`，`build/` 不进 git）
 - 用测试笔记库启动（不碰真正的「我的笔记」）：`open -n build/BetterMD.app --args -libraryPath "$PWD/.build/dev-library"`
 - 不开屏幕录制权限也能看界面：再加 `-snapshotPath /某处/图.png`，两秒多以后存下窗口图片、编辑器图片（`图-editor.png`）和一份 `.txt`（每个列表的行数、AppModel 里的数据、编辑器里渲染出了什么），然后自动退出。可选 `-snapshotNote 标题里的字` 先选中某篇，`-snapshotAppearance dark` 用深色，`-snapshotSelect "起|止"` 在编辑器里选中一段。注意：SwiftUI 列表的内容画不进图片，列表要看 `.txt`。
 - 只看编辑器：`node scripts/editor-shot.mjs 笔记.md 图.png [--dark] [--cursor 文字] [--select 起 止] [--size 宽x高]`（无头 Chrome；先 `npm --prefix editor run build`）
-- VS Code 插件（`vscode/`）：打包 `scripts/vscode.sh`，加 `--install` 装进 VS Code（装完要在 VS Code 里重新加载窗口）；测试 `node --test vscode/test/lib.test.js`，和编辑器的同步测试 `node vscode/test/sync.mjs`（无头 Chrome，不开 VS Code；先 `npm --prefix editor run build`）
+- VS Code 插件（`vscode/`）：打包 `scripts/vscode.sh`，加 `--install` 装进 VS Code（装完要在 VS Code 里重新加载窗口）；测试 `node --test vscode/test/lib.test.js vscode/test/notes.test.js vscode/test/library.test.js`，和编辑器的同步测试 `node vscode/test/sync.mjs`（无头 Chrome，不开 VS Code；先 `npm --prefix editor run build`）
 - 实现计划在 `docs/superpowers/plans/`

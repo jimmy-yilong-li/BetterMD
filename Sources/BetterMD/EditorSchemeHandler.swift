@@ -27,9 +27,11 @@ final class EditorSchemeHandler: NSObject, WKURLSchemeHandler {
         let id = ObjectIdentifier(task)
         running[id] = task
         // 在后台读：图片可能只在 iCloud 上，读的时候要等下载，不能卡住界面
-        Task {
+        Task { [task] in
             let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: file) }.value
-            guard let task = running.removeValue(forKey: id) else { return }
+            // 还得是同一个请求：被叫停的请求释放以后，新请求可能用上同一个地址（同一个 ObjectIdentifier）
+            guard let current = running[id], current === task else { return }
+            running.removeValue(forKey: id)
             guard let data else {
                 task.didFailWithError(URLError(.fileDoesNotExist))
                 return

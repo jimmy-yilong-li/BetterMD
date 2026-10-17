@@ -221,6 +221,9 @@ function build(state) {
           const task = node.node.nextSibling?.name === 'Task' ? node.node.nextSibling : null;
           const marker = task?.getChild('TaskMarker');
           const kind = marker ? 'task' : item?.parent?.name === 'BulletList' ? 'bullet' : 'number';
+          // 编号列表里的待办（“1. [ ] 第一步”）：序号和方框都要显示
+          const numbered = item?.parent?.name === 'OrderedList';
+          const label = numbered ? doc.sliceString(from, to) : '';
           const markEnd = marker ? marker.to : to;
           const end = doc.sliceString(markEnd, markEnd + 1) === ' ' ? markEnd + 1 : markEnd;
           const line = doc.lineAt(from);
@@ -229,18 +232,18 @@ function build(state) {
           // 行首到符号之间只有空白时，整段换成固定宽度的符号区，折行的文字悬挂对齐
           if (/^\s*$/.test(doc.sliceString(line.from, from))) {
             const depth = listDepth(item);
-            const width = depth * LIST_STEP + LIST_MARK[kind];
+            const width = depth * LIST_STEP + LIST_MARK[kind] + (kind === 'task' && numbered ? LIST_MARK.number : 0);
             add(Decoration.line({ class: 'cm-li', attributes: { style: `--hang:${width}em` } }), line.from);
             if (touches(from, markEnd)) {
               add(dim, from, markEnd);
             } else {
-              const label = kind === 'number' ? doc.sliceString(from, to) : '';
               add(Decoration.replace({ widget: new ListMarkWidget(kind, width, depth, label, checked) }), line.from, end);
             }
           } else if (touches(from, markEnd)) {
             add(dim, from, markEnd);
           } else if (kind !== 'number') {
-            add(Decoration.replace({ widget: new ListMarkWidget(kind, LIST_MARK[kind], 0, '', checked) }), from, end);
+            const width = LIST_MARK[kind] + (kind === 'task' && numbered ? LIST_MARK.number : 0);
+            add(Decoration.replace({ widget: new ListMarkWidget(kind, width, 0, label, checked) }), from, end);
           } else {
             add(mark('cm-list-num'), from, to);
           }
@@ -301,8 +304,11 @@ function build(state) {
           return;
         }
         case 'BlockMath': {
-          const tex = texOf(doc.sliceString(from, to));
-          const block = ownsLines(from, to);
+          const src = doc.sliceString(from, to);
+          const tex = texOf(src);
+          // 还没写结尾的 $$ / \]（或者忘了写）：不画成公式，免得后面整篇都变成一大块红色的公式
+          const closed = src.startsWith('\\begin') ? /\\end\{/.test(src) : node.node.getChildren('BlockMathMark').length >= 2;
+          const block = ownsLines(from, to) && closed;
           if (!touches(from, to) && block) {
             replaceBlock(new MathWidget(tex, true, true), from, to);
             return false;

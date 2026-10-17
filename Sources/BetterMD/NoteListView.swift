@@ -352,6 +352,8 @@ private struct FocusableTextField: NSViewRepresentable {
 
         func controlTextDidChange(_ note: Notification) {
             guard let field = note.object as? NSTextField else { return }
+            // 输入法还在拼字（拼音字母还没变成汉字）时先不搜：不然每个字母都重新筛一遍列表、换掉选中的笔记
+            if let editor = field.currentEditor() as? NSTextView, editor.hasMarkedText() { return }
             text.wrappedValue = field.stringValue
         }
 

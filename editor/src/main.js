@@ -59,6 +59,8 @@ const editKeys = [
   { key: 'Mod-f', run: openSearchPanel, scope: 'editor search-panel', preventDefault: true },
   { key: 'Alt-Mod-f', run: openReplace, scope: 'editor search-panel', preventDefault: true },
   { key: 'Mod-g', run: findNext, shift: findPrevious, scope: 'editor search-panel', preventDefault: true },
+  // 查找栏输入框里的撤销：VS Code 的网页外壳把浏览器自带的撤销拦掉了，这里自己做
+  { key: 'Mod-z', run: () => document.execCommand('undo'), shift: () => document.execCommand('redo'), scope: 'search-panel' },
   { key: 'Escape', run: () => { if (!focusMode) return false; post({ type: 'exitFocus' }); return true; } },
   // 文字样式
   { key: 'Mod-b', run: toggleWrap('**') },
@@ -217,11 +219,21 @@ function flushComposing() {
   if (pendingWhileComposing && !view.composing) sendText();
 }
 
+/** 这次发出去的正文，是不是拒收了 App 送来的另一份内容以后重发的（App 要把那一份另存，不能悄悄丢掉）。 */
+let overrodeApp = false;
+
+/** 每篇笔记最后一次发出去的改动编号（重新打开时判断 App 送来的是不是旧内容）。 */
+const noteSeq = new Map();
+
 function sendText() {
   pendingWhileComposing = false;
   if (!current.id) return;
   sentSeq += 1;
-  post({ type: 'change', id: current.id, text: view.state.doc.toString(), seq: sentSeq });
+  noteSeq.set(current.id, sentSeq);
+  const message = { type: 'change', id: current.id, text: view.state.doc.toString(), seq: sentSeq };
+  if (overrodeApp) message.overrode = true;
+  overrodeApp = false;
+  post(message);
 }
 
 // ---- App → 编辑器 ----
@@ -240,15 +252,25 @@ function setDocument(id, rawText, options = {}) {
     updateDocument(text, dir, ro, options.seq, meta);
     return;
   }
-  // 先建好新笔记的编辑器状态；换的过程中 current 不指向任何笔记，万一出错，打的字也不会记到别的笔记上
-  const state = makeState(text, dir, ro, meta);
+  leaveNote();
   remember();
+  // 重新打开一篇：这篇最后发出去的改动 App 还没收到（App 送来的编号比它小），App 给的就是旧内容，
+  // 用离开时记下的正文，打开以后重发一遍（和同一篇里的“过时”一样，以编辑器为准）
+  const remembered = memory.get(id);
+  const stale = typeof options.seq === 'number' && (noteSeq.get(id) ?? 0) > options.seq && remembered && remembered.text !== text;
+  // 先建好新笔记的编辑器状态；换的过程中 current 不指向任何笔记，万一出错，打的字也不会记到别的笔记上
+  overrodeApp = false;
+  const state = makeState(stale ? remembered.text : text, dir, ro, meta);
   current = { id: null, dir: '', readOnly: true };
   view.setState(state);
   syncFocus();
   current = { id, dir, readOnly: ro };
+  if (stale) {
+    overrodeApp = true;
+    sendText();
+  }
   const saved = memory.get(id);
-  if (saved && saved.text === text) {
+  if (saved && saved.text === view.state.doc.toString()) {
     view.dispatch({ selection: EditorSelection.fromJSON(saved.selection), effects: saved.scroll });
   } else if (options.selectTitle) {
     const first = view.state.doc.line(1);
@@ -281,6 +303,7 @@ function updateDocument(text, dir, ro, seq, meta) {
   }
   current = { ...current, dir, readOnly: ro };
   if (stale && old !== text) {
+    overrodeApp = true;
     if (composing) pendingWhileComposing = true;
     else sendText();
   }
@@ -307,8 +330,26 @@ function remember() {
   });
 }
 
+/**
+ * 离开这篇笔记（换笔记、清空）之前：输入法还在拼字就先让它结束，拼好的字留在这篇里并发出去
+ * （不然换过去以后编辑器一直以为在拼字，新笔记里打的字都攒着不发）；等着存的附件作废（不然回来时会插到错的地方）。
+ */
+function leaveNote() {
+  if (view.compositionStarted || view.composing) {
+    const refocus = view.hasFocus;
+    view.contentDOM.blur();
+    view.observer?.flush?.();
+    flushComposing();
+    if (pendingWhileComposing) sendText();
+    if (refocus) view.focus();
+  }
+  for (const pending of pendingInserts) pending.cancelled = true;
+  pendingInserts.clear();
+}
+
 /** 没有选中笔记时：清空，只读。 */
 function clear() {
+  leaveNote();
   flushComposing();
   remember();
   current = { id: null, dir: '', readOnly: true };
@@ -399,9 +440,11 @@ function onPaste(event, v) {
   const data = event.clipboardData;
   const files = [...(data?.files ?? [])];
   if (!files.length || v.state.readOnly) return false;
-  // 从 Word、Pages 复制文字时，剪贴板里还会附带一张文字的截图：有正经文字就贴文字（单独一个网址除外）
+  // 从 Word、Pages 复制文字时，剪贴板里还会附带一张文字的截图：有正经文字就贴文字（单独一个网址除外）。
+  // 在 Finder 里复制的文件，剪贴板里的文字只是文件名：那还是贴文件
   const text = data.getData('text/plain').trim();
-  if (text && !/^\S+:\/\/\S+$/.test(text)) return false;
+  const justNames = text.split('\n').every(line => files.some(f => f.name === line.trim() || line.trim().endsWith('/' + f.name)));
+  if (text && !justNames && !/^\S+:\/\/\S+$/.test(text)) return false;
   event.preventDefault();
   insertFiles(v, files, v.state.selection.main);
   return true;
@@ -427,6 +470,7 @@ let dragDepth = 0;
 const draggingFiles = event => !view.state.readOnly && !!event.dataTransfer?.types.includes('Files');
 document.addEventListener('dragenter', event => {
   if (!draggingFiles(event)) return;
+  event.preventDefault(); // VS Code 的网页外壳看到没人接的拖动，会交给 VS Code 自己（把文件打开），不插进笔记
   dragDepth++;
   host.classList.add('is-dropping');
 });
@@ -485,7 +529,7 @@ async function insertFiles(v, files, range) {
       const reply = await post({ type: 'attach', id, name: file.name, mime: file.type, data });
       if (reply?.link) items.push({ link: reply.link, name: file.name, image: file.type.startsWith('image/') });
     }
-    if (current.id !== id || !items.length) return;
+    if (pending.cancelled || current.id !== id || !items.length) return;
     insertAttachments(items, EditorSelection.range(pending.from, pending.to));
   } finally {
     pendingInserts.delete(pending);

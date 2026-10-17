@@ -37,6 +37,15 @@ public struct LibraryState: Codable, Hashable, Sendable {
         }
     }
 
+    /// 把读不出来那段时间里记下的（`changes`，从空状态开始记的）合到这份上：置顶取并集，废纸篓来源以新记的为准。
+    public func merging(_ changes: LibraryState) -> LibraryState {
+        var merged = self
+        merged.pinned.formUnion(changes.pinned)
+        merged.trashOrigins.merge(changes.trashOrigins) { _, new in new }
+        merged.welcomed = welcomed || changes.welcomed
+        return merged
+    }
+
     /// 文件夹 `old` 改名成 `new` 以后，里面所有路径一起改。
     public mutating func folderRenamed(from old: String, to new: String) {
         let swap = { (path: String) -> String in

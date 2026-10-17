@@ -400,6 +400,87 @@ await atText('结尾');
 await delay(200);
 check('公式块结尾行后面的字照常显示', (await run('document.querySelector(".cm-content").textContent')).includes('是平方'));
 
+// ---- 编辑器和插件的审查（2026-10-17）找到的问题 ----
+await run(`window.webkit.messageHandlers.bettermd.postMessage = m => { window.sent.push(m); return Promise.resolve(m.type === 'attach' ? { link: '附件/x.png' } : null); }; true`);
+const changesFor = async id => JSON.parse(await run(`JSON.stringify(window.sent.filter(m => m.type === 'change' && m.id === ${JSON.stringify(id)}))`));
+
+// 输入法正在拼字时换了笔记：拼的字不能落进新笔记；之后在新笔记里打的字照常发给 App
+await run('window.sent = []');
+await setDoc('IA', '甲');
+await cursorAt('1');
+await send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 });
+await delay(80);
+await setDoc('IB', '乙');
+// 换过去以后编辑器不能还以为在拼字（不然新笔记里打的字都攒着不发）。
+// 拼了一半的字去哪：真的 WebKit 在编辑器失去焦点时把它交给原来那篇；无头 Chrome 模拟不了这一步，这里不查
+check('拼字时换了笔记，换过去以后不再是“正在拼字”', (await run('window.bettermd.view.composing')) === false);
+await delay(80);
+await send('Input.insertText', { text: '你' });
+await delay(300);
+await atEnd();
+await type('abc');
+await delay(300);
+check('换过去以后打的字照常发给 App', (await changesFor('IB')).at(-1)?.text === await doc(), JSON.stringify([await doc(), await changesFor('IB')]));
+
+// 重新打开一篇：App 还没收到这篇最后的改动（送来的编号小），不能用旧内容盖掉刚打的字
+await run('window.sent = []');
+await setDoc('A2', '甲的正文');
+await cursorAt('4');
+await type('！');
+const lastA2 = (await changesFor('A2')).at(-1).seq;
+await setDoc('B2', '乙');
+await setDoc('A2', '甲的正文', { seq: lastA2 - 1 });
+check('重新打开时 App 送来旧内容，刚打的字还在', (await doc()) === '甲的正文！', JSON.stringify(await doc()));
+check('并且重发给 App，标明拒收了旧内容', (await changesFor('A2')).at(-1)?.overrode === true && (await changesFor('A2')).at(-1)?.text === '甲的正文！');
+
+// 附件还在存时换到别的笔记打字，再回来：附件不会插到错的地方，正文不变，页面不报错
+await run(`window.webkit.messageHandlers.bettermd.postMessage = m => { window.sent.push(m);
+  return m.type === 'attach' ? new Promise(r => setTimeout(() => r({ link: '附件/x.png' }), 600)) : Promise.resolve(null); }; true`);
+await setDoc('PA', 'hello world');
+await run(`(() => { const v = window.bettermd.view; v.focus(); v.dispatch({ selection: { anchor: 0, head: 5 } }); })()`);
+await run(pastePNG);
+await delay(50);
+await setDoc('PB', 'abc');
+await atEnd();
+await type('0123456789');
+await setDoc('PA', 'hello world');
+await delay(900);
+check('附件存好前换走又回来：原来那篇不变', (await doc()) === 'hello world', JSON.stringify(await doc()));
+await run(`window.webkit.messageHandlers.bettermd.postMessage = m => { window.sent.push(m); return Promise.resolve(m.type === 'attach' ? { link: '附件/x.png' } : null); }; true`);
+
+// 只有开头没有结尾的 $$：不画成公式，后面的标题、列表照常显示
+await setDoc('U', '开头\n\n$$\nx^2\n\n# 后面的标题\n\n- 列表');
+await atText('开头');
+await delay(200);
+check('没写结尾的 $$ 不会把后面整篇变成公式', (await count('.cm-math-block')) === 0 && (await run('document.querySelector(".cm-content").textContent')).includes('后面的标题'));
+
+// 编号列表里的待办：序号和方框都显示
+await setDoc('N', '1. [ ] 第一步\n2. [x] 第二步\n\n别处');
+await atText('别处');
+await delay(200);
+check('编号列表里的待办还显示序号', (await run('[...document.querySelectorAll(".cm-task-number")].map(e => e.textContent).join(",")')) === '1.,2.' && (await count('.cm-task-box')) === 2);
+
+// 表格格子里代码中的 \| 显示成 |
+await setDoc('T2', '| 写法 | 说明 |\n| --- | --- |\n| `a \\| b` | 竖线 |\n\n别处');
+await atText('别处');
+await delay(200);
+check('表格格子里的 \\| 显示成 |', (await run('document.querySelector(".cm-table code")?.textContent ?? ""')) === 'a | b', await run('document.querySelector(".cm-table code")?.textContent ?? ""'));
+
+// 拖文件进来时接住拖动（VS Code 里没人接的话会交给 VS Code 自己打开那个文件）
+check('拖文件进来时接住拖动', await run(`(() => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'a.png', { type: 'image/png' }));
+  const e = new DragEvent('dragenter', { dataTransfer: dt, bubbles: true, cancelable: true }); document.body.dispatchEvent(e);
+  document.body.dispatchEvent(new DragEvent('dragleave', { dataTransfer: dt, bubbles: true })); return e.defaultPrevented; })()`));
+
+// 在 Finder 里复制文件再粘贴：剪贴板里的文字只是文件名，贴的是文件
+await setDoc('FP', '');
+await atEnd();
+await run(`(() => { const dt = new DataTransfer();
+  const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+  dt.items.add(new File([bytes], '截图.png', { type: 'image/png' })); dt.setData('text/plain', '截图.png');
+  window.bettermd.view.contentDOM.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); })()`);
+await delay(300);
+check('从 Finder 复制的文件粘贴进来是附件，不是文件名', (await doc()).includes('![](附件/x.png)'), JSON.stringify(await doc()));
+
 check('页面没有报错', pageErrors.length === 0, pageErrors.join(' | '));
 console.log(failures ? `\n${failures} 项没通过` : '\n全部通过');
 quit(failures ? 1 : 0);

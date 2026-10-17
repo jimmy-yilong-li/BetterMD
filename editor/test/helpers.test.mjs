@@ -24,7 +24,7 @@ test('标签的位置按 UTF-16 算', () => {
 test('拆表格的一行', () => {
   assert.deepEqual(splitRow('| a | b |'), ['a', 'b']);
   assert.deepEqual(splitRow('a | b'), ['a', 'b']);
-  assert.deepEqual(splitRow('| a \\| b | c |'), ['a \\| b', 'c']);
+  assert.deepEqual(splitRow('| a \\| b | c |'), ['a | b', 'c']);
   assert.deepEqual(splitRow('| | x |'), ['', 'x']);
 });
 

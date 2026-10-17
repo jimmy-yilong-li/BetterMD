@@ -117,11 +117,14 @@ struct MarkdownEditor: NSViewRepresentable {
                 shown = nil
                 lastSeq = 0
                 show(wanted.note, selectTitle: wanted.selectTitle)
+                // 网页重新加载过（比如它的进程崩了）：专注模式这类状态也要再告诉它一遍
+                NotificationCenter.default.post(name: .editorReady, object: nil)
             case "change":
                 if let seq = body["seq"] as? Int { lastSeq = max(lastSeq, seq) }
                 if let id, let text = body["text"] as? String {
                     if shown?.id == id { shown?.text = text }
-                    model.updateText(text, for: id)
+                    // overrode：编辑器拒收了刚送去的另一版（别处改的），App 会先把那一版另存
+                    model.updateText(text, for: id, overrodeApp: body["overrode"] as? Bool == true)
                 }
             case "attach":
                 if let id, let name = body["name"] as? String,
@@ -155,10 +158,23 @@ struct MarkdownEditor: NSViewRepresentable {
                     model.scope = .all
                     model.query = ""
                     model.select(note.id)
+                } else if Self.runsSomething(file) {
+                    // 程序、脚本（.app、.command、.sh……）只在 Finder 里指出来，不直接打开：打开就是运行
+                    NSWorkspace.shared.activateFileViewerSelecting([file])
                 } else {
                     NSWorkspace.shared.open(file)
                 }
             }
+        }
+
+        /// 打开这个文件会不会运行什么：App、安装包、可执行文件、脚本。
+        static func runsSomething(_ file: URL) -> Bool {
+            let scripts: Set<String> = ["app", "command", "sh", "zsh", "bash", "tool", "workflow", "scpt", "applescript",
+                                        "terminal", "pkg", "mpkg", "jar", "py", "rb", "pl", "action", "prefpane", "plugin"]
+            if scripts.contains(file.pathExtension.lowercased()) { return true }
+            let values = try? file.resourceValues(forKeys: [.isApplicationKey, .isPackageKey, .isExecutableKey, .isDirectoryKey])
+            return values?.isApplication == true || values?.isPackage == true
+                || (values?.isExecutable == true && values?.isDirectory != true)
         }
 
         // MARK: 导航：只许加载编辑器网页本身

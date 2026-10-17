@@ -9,6 +9,8 @@ extension Notification.Name {
     static let focusPane = Notification.Name("BetterMD.focusPane")
     /// 菜单栏的格式、查找命令，交给编辑器做（object 是命令名，见 editor/src/main.js 的 FORMATS）。
     static let editorCommand = Notification.Name("BetterMD.editorCommand")
+    /// 编辑器网页加载好了（第一次，或者崩了以后重新加载）。
+    static let editorReady = Notification.Name("BetterMD.editorReady")
 }
 
 /// 窗口里的三栏。

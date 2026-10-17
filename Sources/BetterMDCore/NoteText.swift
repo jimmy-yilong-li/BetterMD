@@ -11,7 +11,8 @@ public enum NoteText {
             if !hashes.isEmpty && hashes.count <= 6 {
                 let rest = line.dropFirst(hashes.count)
                 if rest.isEmpty || rest.first == " " {
-                    return rest.trimmingCharacters(in: .whitespaces)
+                    // 结尾的 “ #”“ ##” 不算标题文字（CommonMark 的写法）
+                    return String(rest).replacing(#/\s+#+\s*$/#, with: "").trimmingCharacters(in: .whitespaces)
                 }
             }
             return line
@@ -24,10 +25,11 @@ public enum NoteText {
     public static func tags(in text: String) -> [String] {
         var result: [String] = []
         var seen = Set<String>()
-        var fences = FenceTracker()
+        // 按上下文判断缩进代码：列表项、段落里缩进的续行是正文，里面的标签照样算（编辑器也是这样画的）
+        var code = CodeTracker()
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
-            if fences.isCode(line) || isIndentedCode(line) { continue }
+            if code.isCode(line) { continue }
             for tag in tagsInLine(removingInlineCode(line)) where seen.insert(tag).inserted {
                 result.append(tag)
             }
@@ -35,14 +37,13 @@ public enum NoteText {
         return result
     }
 
-    /// 有没有还没勾掉的待办（`- [ ]`、`* [ ]`、`+ [ ]`）；代码块里的不算。
+    /// 有没有还没勾掉的待办（`- [ ]`、`1. [ ]`，引用里的 `> - [ ]` 也算，和编辑器画出复选框的一致）；代码块里的不算。
     public static func hasOpenTodo(_ text: String) -> Bool {
-        var fences = FenceTracker()
+        var code = CodeTracker()
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
-            if fences.isCode(line) { continue }
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("- [ ]") || t.hasPrefix("* [ ]") || t.hasPrefix("+ [ ]") { return true }
+            if code.isCode(line) || !line.contains("[ ]") { continue }
+            if line.firstMatch(of: #/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[ \]/#) != nil { return true }
         }
         return false
     }
@@ -54,7 +55,8 @@ public enum NoteText {
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
             if fences.isCode(line) || !line.contains("![") { continue }
-            if let match = line.firstMatch(of: #/!\[[^\]]*\]\((<[^>\n]*>|[^)\s]+)/#) {
+            // 地址里可以有一层成对的括号（“图(1).png”），和 MarkdownLinks 认的一样
+            if let match = line.firstMatch(of: #/!\[[^\]]*\]\((<[^>\n]*>|(?:[^()\s]|\([^()\s]*\))+)/#) {
                 return String(match.output.1)
             }
         }
@@ -136,7 +138,9 @@ public enum NoteText {
                 if run >= current.length && t.dropFirst(run).trimmingCharacters(in: .whitespaces).isEmpty { open = nil }
                 return true
             }
-            if let first = t.first, first == "`" || first == "~" {
+            // 缩进 4 格以上的 ``` 是缩进代码里的一行字，不是围栏
+            let indent = line.prefix { $0 == " " }.count
+            if indent < 4, !line.hasPrefix("\t"), let first = t.first, first == "`" || first == "~" {
                 let run = t.prefix { $0 == first }.count
                 if run >= 3 {
                     open = (first, run)
@@ -151,31 +155,71 @@ public enum NoteText {
     /// 缩进 4 格（或一个 Tab），前面是空行或者也是缩进代码，而且不在列表里（列表项缩进的续行是正文）。
     struct CodeTracker {
         private var fences = FenceTracker()
+        /// 上一行是不是段落里的字（段落的下一行缩进了也是段落的续行，不是代码）
+        private var previousParagraph = false
         private var previousBlank = true
         private var inIndentedCode = false
         private var inList = false
 
         mutating func isCode(_ line: String) -> Bool {
             if fences.isCode(line) {
+                previousParagraph = false
                 previousBlank = false
                 inIndentedCode = false
                 return true
             }
-            let blank = line.trimmingCharacters(in: .whitespaces).isEmpty
+            let t = line.trimmingCharacters(in: .whitespaces)
+            let blank = t.isEmpty
             defer { previousBlank = blank }
-            if blank { return inIndentedCode }
+            if blank {
+                previousParagraph = false
+                return inIndentedCode
+            }
             let indented = line.hasPrefix("    ") || line.hasPrefix("\t")
-            if indented && (inIndentedCode || (previousBlank && !inList)) {
+            if indented && (inIndentedCode || (!previousParagraph && !inList)) {
                 inIndentedCode = true
                 return true
             }
             inIndentedCode = false
             if !indented {
-                inList = line.trimmingCharacters(in: .whitespaces).firstMatch(of: #/^(?:[-*+]|\d+[.)])(?:\s|$)/#) != nil
-                    || (inList && !previousBlank) // 列表项的懒续行
+                inList = NoteText.startsWithListMarker(t) || (inList && !previousBlank) // 列表项的懒续行
             }
+            // 小标题、分割线后面紧跟的缩进行是代码；普通的字后面的是续行
+            previousParagraph = !NoteText.isATXHeading(t) && !NoteText.isThematicBreak(t)
             return false
         }
+    }
+
+    // 下面几个逐行判断不用正则：每篇笔记每一行都要跑，几千篇笔记时正则太慢
+
+    /// “- ”“* ”“+ ”“1. ”“2) ”开头（或者整行就是这个符号）。`t` 是去掉两头空白以后的一行。
+    static func startsWithListMarker(_ t: String) -> Bool {
+        guard let first = t.unicodeScalars.first else { return false }
+        var rest = Substring(t).unicodeScalars.dropFirst()
+        if first == "-" || first == "*" || first == "+" {
+            return rest.first.map { $0 == " " || $0 == "\t" } ?? true
+        }
+        guard ("0"..."9").contains(first) else { return false }
+        rest = rest.drop { ("0"..."9").contains($0) }
+        guard let mark = rest.first, mark == "." || mark == ")" else { return false }
+        return rest.dropFirst().first.map { $0 == " " || $0 == "\t" } ?? true
+    }
+
+    /// “# 标题”这类小标题：1 到 6 个 #，后面是空白或者行尾。
+    static func isATXHeading(_ t: String) -> Bool {
+        let hashes = t.prefix { $0 == "#" }.count
+        guard (1...6).contains(hashes) else { return false }
+        return t.dropFirst(hashes).first.map(\.isWhitespace) ?? true
+    }
+
+    /// 分割线：三个以上同样的 - * _（中间可以有空格），没有别的字。
+    static func isThematicBreak(_ t: String) -> Bool {
+        guard let mark = t.first, mark == "-" || mark == "*" || mark == "_" else { return false }
+        var count = 0
+        for ch in t {
+            if ch == mark { count += 1 } else if ch != " " && ch != "\t" { return false }
+        }
+        return count >= 3
     }
 
     /// 缩进 4 格（或一个 Tab）的代码行；列表项缩进的不算。

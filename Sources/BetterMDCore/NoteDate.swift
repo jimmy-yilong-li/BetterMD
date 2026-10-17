@@ -3,20 +3,15 @@ import Foundation
 /// 列表里的时间：今天“今天 10:24”，昨天“昨天 19:05”，今年“10月3日”，更早“2025年10月3日”。
 public enum NoteDate {
     public static func label(for date: Date, now: Date = .now, calendar: Calendar = .current) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.locale = Locale(identifier: "zh_CN")
-        if calendar.isDate(date, inSameDayAs: now) {
-            formatter.dateFormat = "HH:mm"
-            return "今天 " + formatter.string(from: date)
-        }
+        // 不用 DateFormatter：列表每画一行都要算一次，每次新建一个格式器很贵
+        let c = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let time = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+        if calendar.isDate(date, inSameDayAs: now) { return "今天 " + time }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
            calendar.isDate(date, inSameDayAs: yesterday) {
-            formatter.dateFormat = "HH:mm"
-            return "昨天 " + formatter.string(from: date)
+            return "昨天 " + time
         }
-        formatter.dateFormat = calendar.isDate(date, equalTo: now, toGranularity: .year) ? "M月d日" : "yyyy年M月d日"
-        return formatter.string(from: date)
+        let monthDay = "\(c.month ?? 1)月\(c.day ?? 1)日"
+        return calendar.isDate(date, equalTo: now, toGranularity: .year) ? monthDay : "\(c.year ?? 0)年" + monthDay
     }
 }

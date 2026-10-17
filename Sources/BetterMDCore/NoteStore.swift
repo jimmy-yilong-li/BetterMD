@@ -18,6 +18,8 @@ public struct NoteStore: Sendable {
         public var state: LibraryState
         /// 只在 iCloud 上、这次没读的笔记有几篇（已经请 iCloud 下载，下好了再读）
         public var downloading = 0
+        /// state.json 读得出来（或者本来就没有）。读不出来时 state 是空的，不能拿它盖掉原文件
+        public var stateReadable = true
     }
 
     public func url(for path: String) -> URL {
@@ -40,20 +42,22 @@ public struct NoteStore: Sendable {
     /// 连正文和解析结果一起沿用，不再读文件、不再解析——回到 App 时重新读取就几乎不花时间。
     /// 需要解析的笔记分到多个核上并行解析。
     public func load(reusing previous: [String: Note] = [:]) throws -> Snapshot {
-        let state = loadState()
-        let keys: [URLResourceKey] = [.isDirectoryKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey]
+        let (state, stateReadable) = readState()
+        let keys: [URLResourceKey] = [.isDirectoryKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey, .isSymbolicLinkKey]
         guard let walker = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
-            return Snapshot(notes: [], folders: [], state: state)
+            return Snapshot(notes: [], folders: [], state: state, stateReadable: stateReadable)
         }
         var notes: [Note] = []
         var folders: [String] = []
         var downloading = 0
-        var fresh: [(path: String, text: String, created: Date, modified: Date)] = []
+        var fresh: [(path: String, text: String, created: Date, modified: Date, size: Int)] = []
         for case let url as URL in walker {
             guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
+            // 符号链接的 .md 不当笔记：指到库外的会改到别处的文件，指到库里的会出现两遍
+            if values.isSymbolicLink == true { continue }
             let path = relativePath(of: url)
             let top = path.split(separator: "/").first.map(String.init) ?? path
             if values.isDirectory == true {
@@ -69,11 +73,14 @@ public struct NoteStore: Sendable {
             guard url.pathExtension.lowercased() == "md" else { continue }
             let modified = values.contentModificationDate ?? .now
             let created = values.creationDate ?? modified
-            // 修改时间和大小都没变才沿用（有的网络盘、exFAT 时间只精确到秒，同一秒里的外部修改光看时间会漏掉）
-            if let old = previous[path], old.modified == modified, values.fileSize == old.text.utf8.count {
+            let size = values.fileSize ?? 0
+            // 修改时间和文件大小都和上次读、写时一样才沿用（有的网络盘、exFAT 时间只精确到秒，光看时间会漏掉）。
+            // 比的是记下的文件大小，不是正文的字节数：\r\n、GB18030、带 BOM 的文件两者不一样。
+            // iCloud 把文件清成空壳时，时间和大小都不变，照样沿用，不会从列表里消失
+            if let old = previous[path], let disk = old.disk, disk.modified == modified, disk.size == size {
                 notes.append(Note(id: old.id, path: path, text: old.text, parsed: old.parsed, created: created,
-                                  modified: modified, isPinned: state.pinned.contains(path),
-                                  originalFolder: state.trashOrigins[path]))
+                                  modified: old.modified, isPinned: state.pinned.contains(path),
+                                  originalFolder: state.trashOrigins[path], disk: disk))
                 continue
             }
             if downloadIfCloudOnly(url) {
@@ -81,7 +88,7 @@ public struct NoteStore: Sendable {
                 continue
             }
             guard let text = readText(url) else { continue }
-            fresh.append((path, text, created, modified))
+            fresh.append((path, text, created, modified, size))
         }
         // 新读到的正文并行解析
         var parsed = [ParsedNote?](repeating: nil, count: fresh.count)
@@ -94,10 +101,19 @@ public struct NoteStore: Sendable {
             guard let result else { continue }
             notes.append(Note(id: previous[entry.path]?.id ?? UUID(), path: entry.path, text: entry.text, parsed: result,
                               created: entry.created, modified: entry.modified,
-                              isPinned: state.pinned.contains(entry.path), originalFolder: state.trashOrigins[entry.path]))
+                              isPinned: state.pinned.contains(entry.path), originalFolder: state.trashOrigins[entry.path],
+                              disk: DiskStamp(modified: entry.modified, size: entry.size, text: entry.text)))
         }
         folders.sort { $0.localizedStandardCompare($1) == .orderedAscending }
-        return Snapshot(notes: notes, folders: folders, state: state, downloading: downloading)
+        return Snapshot(notes: notes, folders: folders, state: state, downloading: downloading, stateReadable: stateReadable)
+    }
+
+    /// 磁盘上这篇现在的样子和正文；文件不在、读不出来返回 nil。保存前、移动前拿它和记下的比，看别处有没有改过。
+    public func currentVersion(of note: Note) -> (stamp: DiskStamp, text: String)? {
+        let file = url(for: note.path)
+        guard let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+              let text = readText(file) else { return nil }
+        return (DiskStamp(modified: values.contentModificationDate ?? .now, size: values.fileSize ?? 0, text: text), text)
     }
 
     /// 只在云上的文件请 iCloud 下载，返回 true。请不动的（比如不归 iCloud 管的网盘）返回 false，
@@ -114,9 +130,9 @@ public struct NoteStore: Sendable {
         return lstat(url.path, &info) == 0 && info.st_flags & UInt32(SF_DATALESS) != 0
     }
 
-    /// 原子写入笔记全文，保留文件原来的创建时间；返回新的修改时间。
+    /// 原子写入笔记全文，保留文件原来的创建时间；返回写下去以后文件的样子（修改时间、大小、指纹）。
     @discardableResult
-    public func write(_ note: Note) throws -> Date {
+    public func write(_ note: Note) throws -> DiskStamp {
         let fm = FileManager.default
         let target = url(for: note.path)
         try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -131,7 +147,8 @@ public struct NoteStore: Sendable {
         } else {
             try data.write(to: target, options: .atomic)
         }
-        return (try? target.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .now
+        let modified = (try? target.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .now
+        return DiskStamp(modified: modified, size: data.count, text: note.text)
     }
 
     /// 在 `folder` 里新建笔记，文件名取自正文标题；返回新笔记。
@@ -144,23 +161,32 @@ public struct NoteStore: Sendable {
         let now = Date()
         // 修改时间用文件自己的：保存前要拿它和磁盘上的比，看别处有没有改过
         let modified = (try? target.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
-        return Note(path: relativePath(of: target), text: text, created: now, modified: modified)
+        return Note(path: relativePath(of: target), text: text, created: now, modified: modified,
+                    disk: DiskStamp(modified: modified, size: text.utf8.count, text: text))
     }
 
     /// 在这篇笔记旁边另存一份正文，文件名是“标题（suffix）”，重名加序号；返回文件名。
     public func saveCopy(_ text: String, besides note: Note, suffix: String) throws -> String {
         let dir = url(for: note.path).deletingLastPathComponent()
-        let target = LibraryLayout.uniqueURL(in: dir, base: LibraryLayout.fileName(forTitle: "\(note.title)（\(suffix)）"))
+        let target = LibraryLayout.uniqueURL(in: dir, base: LibraryLayout.fileName(forTitle: note.title, suffix: "（\(suffix)）"))
         try Data(text.utf8).write(to: target, options: .atomic)
         return target.lastPathComponent
     }
 
     public func loadState() -> LibraryState {
-        guard let data = try? Data(contentsOf: url(for: LibraryLayout.stateFile)),
+        readState().state
+    }
+
+    /// 读 state.json。文件不在：空状态，算读得出来。文件在、却读不出来或解析不了（iCloud 只留了空壳又没网、
+    /// 权限、文件坏了）：空状态，readable 为 false，这时不能拿空状态把它盖掉。
+    public func readState() -> (state: LibraryState, readable: Bool) {
+        let file = url(for: LibraryLayout.stateFile)
+        guard FileManager.default.fileExists(atPath: file.path) else { return (LibraryState(), true) }
+        guard let data = try? Data(contentsOf: file),
               let state = try? JSONDecoder().decode(LibraryState.self, from: data) else {
-            return LibraryState()
+            return (LibraryState(), false)
         }
-        return state
+        return (state, true)
     }
 
     public func saveState(_ state: LibraryState) throws {
@@ -204,7 +230,9 @@ public struct NoteStore: Sendable {
             if rebased != note.text {
                 moved.text = rebased
                 do {
-                    moved.modified = try write(moved)
+                    let stamp = try write(moved)
+                    moved.modified = stamp.modified
+                    moved.disk = stamp
                 } catch {
                     if (try? moveItem(at: target, to: source)) != nil { throw error }
                     // 挪也挪不回去：文件留在新位置，正文没改（链接按原来的文件夹写，图片靠按文件名到「附件」里找）
@@ -360,7 +388,12 @@ public struct NoteStore: Sendable {
         if from.path.lowercased() == to.path.lowercased() {
             let temp = from.deletingLastPathComponent().appendingPathComponent(".bettermd-rename-\(UUID().uuidString)")
             try fm.moveItem(at: from, to: temp)
-            try fm.moveItem(at: temp, to: to)
+            do {
+                try fm.moveItem(at: temp, to: to)
+            } catch {
+                try? fm.moveItem(at: temp, to: from) // 第二步失败：改回原来的名字，不能留在隐藏的临时名字上
+                throw error
+            }
         } else {
             try fm.moveItem(at: from, to: to)
         }
