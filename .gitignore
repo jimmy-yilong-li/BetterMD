@@ -6,3 +6,4 @@ build/
 editor/node_modules/
 editor/dist/
 vscode/media/
+.vscode/
