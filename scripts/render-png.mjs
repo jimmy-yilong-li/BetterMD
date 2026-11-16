@@ -11,7 +11,8 @@ if (!input || !output) {
   console.error('用法：node scripts/render-png.mjs <输入文件> <输出.png> [宽] [高]');
   process.exit(1);
 }
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const { chromePath } = await import('./chrome.mjs');
+const CHROME = chromePath();
 const port = 9400 + Math.floor(Math.random() * 500);
 const profile = mkdtempSync(join(tmpdir(), 'bettermd-chrome-'));
 const chrome = spawn(CHROME, [

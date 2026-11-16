@@ -6,10 +6,11 @@
 
 **写给自己，也写给 AI agent 的 Markdown 笔记。**
 
-一个 Bear 风格的 macOS 笔记 App：所见即所得的 Markdown，排得漂亮的公式，<br>
-笔记就是 iCloud 云盘里普通的 `.md` 文件，还能在 VS Code 里用同一个编辑器打开。
+一个 Bear 风格的 macOS / Ubuntu 笔记 App：所见即所得的 Markdown，排得漂亮的公式，<br>
+笔记就是普通的 `.md` 文件，还能在 VS Code 里用同一个编辑器打开。
 
 ![macOS 26](https://img.shields.io/badge/macOS-26-1f1f1f?logo=apple&logoColor=white)
+![Ubuntu](https://img.shields.io/badge/Ubuntu-Electron-E95420?logo=ubuntu&logoColor=white)
 ![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)
 ![SwiftUI](https://img.shields.io/badge/SwiftUI-0A84FF?logo=swift&logoColor=white)
 ![CodeMirror 6](https://img.shields.io/badge/CodeMirror-6-D30707)
@@ -98,6 +99,24 @@ LaTeX 公式用 KaTeX 排版，边写边看结果。认 `$…$`、`$$…$$`，�
 
 ## 从源码构建
 
+### Ubuntu
+
+需要 **Node.js 22.12 以上**、npm 和 Ubuntu 桌面环境。已在 **Ubuntu 26.04 x86_64** 验证；其他 Ubuntu 版本尚未实测。
+
+```bash
+scripts/ubuntu.sh package  # 安装依赖，构建编辑器，生成 .deb 和 tar.gz
+sudo apt install ./build/ubuntu/BetterMD-0.2.0-linux-amd64.deb
+bettermd
+```
+
+Ubuntu 版是同一套纸墨三栏界面：火漆信封的文件夹、多级标签、搜索、置顶、自动保存、图片粘贴/拖入、移动、废纸篓及恢复、外部文件监听、专注模式和深浅主题。默认笔记库是 `~/我的笔记`，可以打开已有的笔记库。正文、附件、`.bettermd/state.json` 和 VS Code 绑定登记与 macOS 版兼容。
+
+**同步**：Linux 上没有 iCloud。在侧栏底下的同步按钮里填一个 git 仓库地址（比如 GitHub 上的私有仓库），改完笔记就自动提交、推送，别的电脑上的改动自动合进来——两边改了同一篇的不同地方会合成一份，改了同一段则以后改的为准、另一版另存，两份都留着。也可以直接把笔记库放进 Dropbox 这类同步盘的文件夹。
+
+同步怎么设置、开发启动、沙箱配置和验证方式见 [Ubuntu 使用与开发](docs/ubuntu.md)。
+
+### macOS
+
 需要：**macOS 26**、**Xcode 26 / Swift 6.2 以上**、**Node.js 20 以上**（打包编辑器网页用）。
 
 ```bash
@@ -139,7 +158,7 @@ scripts/vscode.sh --install   # 打包成 build/bettermd.vsix 并装进 VS Code�
 ## 笔记怎么存
 
 ```
-我的笔记/                 ← 默认在 iCloud 云盘里
+我的笔记/                 ← macOS 默认在 iCloud 云盘；Ubuntu 默认在用户主目录
 ├── 随手记.md             ← 放在根目录 = 未分类
 ├── 工作/
 │   └── BetterMD/
@@ -154,6 +173,8 @@ scripts/vscode.sh --install   # 打包成 build/bettermd.vsix 并装进 VS Code�
 - 删除、移动不弹确认框，进废纸篓的笔记能放回原处。
 
 ## 键盘快捷键
+
+Ubuntu 使用 **Ctrl** 代替下表中的 **⌘**，**Alt** 代替 **⌥**；代码块使用 **Ctrl+Shift+C**，保留 Ctrl+C 用于复制。Ubuntu 的完整常用键表在「帮助 → 键盘快捷键」。
 
 <details>
 <summary>展开看常用的（完整的在 App 里按 <kbd>⌘</kbd> <kbd>/</kbd>）</summary>
@@ -192,9 +213,15 @@ flowchart LR
     Tab["编辑器标签"] 
     Sync["绑定 · 三方合并"]
   end
+  subgraph Ubuntu["Ubuntu（Electron）"]
+    DesktopUI["侧栏 · 列表 · 菜单"] --> DesktopStore["NoteStore（JS）"]
+    Chromium["Chromium 编辑区"]
+  end
   Web <--> CM
+  Chromium <--> CM
   Tab <--> CM
-  Store <--> Files[("iCloud 云盘<br/>我的笔记/*.md")]
+  Store <--> Files[("笔记库 · 我的笔记/*.md<br/>macOS iCloud / Ubuntu 本地或同步目录")]
+  DesktopStore <--> Files
   Sync <--> Files
   Sync <--> Project[("项目里的<br/>CLAUDE.md …")]
 ```
@@ -203,6 +230,7 @@ flowchart LR
 | --- | --- |
 | `Sources/BetterMDCore` | 数据层：读写笔记、解析标题标签、搜索、移动和链接改写、iCloud 状态、冲突检测 |
 | `Sources/BetterMD` | App 界面：SwiftUI 外壳、菜单、侧栏、列表、编辑区、文件监听 |
+| `desktop/` | Ubuntu 桌面版：Electron 外壳、三栏界面、安全文件接口、自动保存、文件监听、git 同步和 Linux 打包配置 |
 | `editor/` | 编辑器网页：CodeMirror 6、Lezer Markdown、公式语法扩展、KaTeX |
 | `vscode/` | VS Code 插件：自定义编辑器、「我的笔记」面板、绑定和三方合并 |
 | `design.md` · `progress.md` | 当前设计（只描述现在）和进度日志（每次改动的来龙去脉） |
@@ -210,14 +238,16 @@ flowchart LR
 ## 开发
 
 ```bash
-scripts/test.sh     # 跑全部测试：Swift、编辑器、真浏览器里按键、VS Code 插件
+scripts/test.sh     # 编辑器、浏览器按键、VS Code；macOS 加 Swift，Linux 加桌面版
+scripts/ubuntu.sh test  # Ubuntu：先准备依赖与资源，再跑上面的全部适用测试
 ```
 
-测试都在后台跑，不开窗口、不开 App、不开 VS Code：
+测试都在后台跑：浏览器用无头 Chrome，Ubuntu 用隐藏的 Electron 窗口，不打开 VS Code：
 
 - **Swift**：数据安全（保存失败、外部修改、移动回滚、冲突另存……）、解析、性能（几千篇笔记的读取和搜索）。
 - **编辑器**：单元测试，加上在无头 Chrome 里发真的按键、粘贴、拖放、输入法拼字。
 - **VS Code 插件**：真的编辑器网页接上真的插件代码，VS Code 换成按真实规则工作的模拟环境（版本对不上就拒收写入、不许切开 emoji、保存时跑格式化）。
+- **Ubuntu 桌面版**：文件操作和失败恢复测试；git 同步用本机的裸仓库当远端、两个临时笔记库当两台电脑（各改各的、改了同一段、一边删一边改、离线、同时推送）；隐藏的真实 Electron 窗口里验证输入、Ctrl 快捷键、图片、搜索、移动、恢复、文件夹改名、外部修改、同步和退出保存，使用临时笔记库。
 
 改设计之前先读 [`design.md`](design.md)，每次改动在 [`progress.md`](progress.md) 最上面记一条。项目的协作规则在 [`CLAUDE.md`](CLAUDE.md)。
 

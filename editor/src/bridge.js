@@ -1,4 +1,4 @@
-// 和外面的宿主说话。宿主有两种：
+// 和外面的宿主说话：macOS App、Ubuntu 桌面版、VS Code。
 // - BetterMD App：通过 WKWebView 的 messageHandlers.bettermd，postMessage 直接返回 App 的答复；
 // - VS Code 插件（vscode/）：通过 acquireVsCodeApi().postMessage。每条消息带一个编号，插件用 { type: 'reply', requestId, value }
 //   答复；插件要调用编辑器时发 { type: 'call', fn, args }，相当于 App 里的 window.bettermd.fn(...args)。
@@ -31,6 +31,7 @@ if (vscode) {
 
 /** 发一条消息给宿主；返回宿主的答复（Promise）。不在宿主里时返回 null。 */
 export function post(message) {
+  if (window.bettermdDesktop) return window.bettermdDesktop.post(message);
   if (vscode) {
     const requestId = ++nextRequest;
     return new Promise(resolve => {
@@ -46,5 +47,5 @@ export function post(message) {
   return h.postMessage(message);
 }
 
-/** 在哪个宿主里：'app'、'vscode'，或者 null（普通浏览器）。 */
-export const host = () => (vscode ? 'vscode' : handler() ? 'app' : null);
+/** 在哪个宿主里：'app'、'desktop'、'vscode'，或者 null（普通浏览器）。 */
+export const host = () => (window.bettermdDesktop ? 'desktop' : vscode ? 'vscode' : handler() ? 'app' : null);

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BetterMD</title>
+  <link rel="stylesheet" href="editor/editor.css">
+  <link rel="stylesheet" href="app.css">
+  <script defer src="icons.js"></script>
+  <script defer src="renderer.js"></script>
+  <script defer src="editor/editor.js"></script>
+</head>
+<body>
+  <!-- 信封图标用的渐变，颜色跟着深浅主题走 -->
+  <svg class="defs" width="0" height="0" aria-hidden="true"><defs>
+    <linearGradient id="g-envelope" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-env-top"/><stop offset="1" class="stop-env-bottom"/></linearGradient>
+    <linearGradient id="g-flap" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-flap-top"/><stop offset="1" class="stop-flap-bottom"/></linearGradient>
+  </defs></svg>
+
+  <div id="shell">
+    <aside id="sidebar" aria-label="笔记导航">
+      <div class="bar side-bar"></div>
+      <nav id="navigation" aria-label="文件夹和标签"></nav>
+      <div class="side-bottom">
+        <div id="trash-slot"></div>
+        <div class="side-footer">
+          <button id="sync-button" title="同步"><span id="sync-icon" aria-hidden="true"></span><span id="sync-label"></span></button>
+          <button id="menu-button" class="icon-button" data-icon="menu" title="菜单：全部命令" aria-label="菜单"></button>
+        </div>
+      </div>
+    </aside>
+
+    <section id="list-pane" aria-label="笔记列表">
+      <div class="bar list-bar">
+        <label class="search-field"><span data-icon="search" aria-hidden="true"></span><input id="search" type="text" placeholder="搜索笔记" aria-label="搜索笔记" autocomplete="off" spellcheck="false"><button id="search-clear" data-icon="clear" title="清除（Esc）" aria-label="清除搜索" hidden></button></label>
+        <button data-command="new" class="icon-button" data-icon="compose" title="新建笔记（Ctrl+N）" aria-label="新建笔记"></button>
+      </div>
+      <div class="list-heading">
+        <h1 id="scope-title">我的笔记</h1>
+        <div class="list-sub"><span id="count"></span><button id="search-scope" class="link-button" hidden></button><button id="empty-trash" class="link-button" data-command="emptyTrash" hidden>清空</button></div>
+      </div>
+      <div id="tag-filter" hidden></div>
+      <div id="note-list" role="listbox" tabindex="0" aria-label="笔记"></div>
+    </section>
+
+    <main id="writing-pane">
+      <header class="bar writing-bar">
+        <button data-command="sidebar" class="icon-button" data-icon="sidebar" title="显示或隐藏侧栏（Ctrl+Alt+S）" aria-label="显示或隐藏侧栏"></button>
+        <span id="breadcrumb"></span>
+        <span class="spacer"></span>
+        <span id="save-state" aria-live="polite"></span>
+        <div class="pill">
+          <button id="format-button" title="格式" aria-label="格式"><span class="aa">Aa</span></button>
+          <button data-command="attach" data-icon="image" title="插入图片或文件（Ctrl+Shift+V）" aria-label="插入图片或文件"></button>
+        </div>
+        <div class="pill">
+          <button data-command="focus" data-icon="focus" title="专注模式（Ctrl+Shift+D）" aria-label="专注模式"></button>
+          <button id="more-button" data-icon="more" title="更多" aria-label="更多"></button>
+        </div>
+      </header>
+      <div id="empty-editor">
+        <div class="empty-seal">M↓</div>
+        <h2>把想法，留在纸上。</h2>
+        <p>选一篇笔记，或者写下新的开始。</p>
+        <button data-command="new" class="primary">新建笔记<kbd>Ctrl N</kbd></button>
+      </div>
+      <div id="editor" hidden></div>
+    </main>
+  </div>
+
+  <div id="notices" aria-live="polite"></div>
+  <div id="popover" hidden></div>
+
+  <dialog id="move-dialog" class="picker">
+    <input id="move-input" type="text" placeholder="移动到哪个文件夹？" autocomplete="off" spellcheck="false" aria-label="搜索文件夹">
+    <div id="move-list" role="listbox"></div>
+    <p class="picker-hint"><kbd>↑</kbd><kbd>↓</kbd> 选择　<kbd>↩</kbd> 移动　<kbd>Esc</kbd> 取消</p>
+  </dialog>
+
+  <dialog id="sync-dialog">
+    <h2>同步</h2>
+    <div id="sync-body"></div>
+  </dialog>
+
+  <dialog id="help-dialog">
+    <h2>键盘快捷键</h2>
+    <div id="shortcut-list"></div>
+    <form method="dialog"><span class="dialog-note">编辑器里也可以直接打 Markdown。</span><button class="primary">知道了</button></form>
+  </dialog>
+</body>
+</html>

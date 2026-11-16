@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { chromePath } from './chrome.mjs';
 
 const args = process.argv.slice(2);
 const flag = name => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : null; };
@@ -25,7 +26,7 @@ if (!input || !output) {
 const page = resolve(dirname(fileURLToPath(import.meta.url)), '../editor/dist/index.html');
 const text = readFileSync(input, 'utf8');
 
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME = chromePath();
 const port = 9400 + Math.floor(Math.random() * 500);
 const profile = mkdtempSync(join(tmpdir(), 'bettermd-chrome-'));
 const chrome = spawn(CHROME, [

@@ -36,7 +36,7 @@ const nodeEnd = type => (state, pos) => {
   return pos;
 };
 const onPress = (dom, fn) => dom.addEventListener('mousedown', e => {
-  if (e.button !== 0 || e.metaKey) return;
+  if (e.button !== 0 || (/Mac|iPhone|iPad/.test(navigator.platform) ? e.metaKey : e.ctrlKey)) return;
   e.preventDefault();
   fn(e);
 });

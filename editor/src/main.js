@@ -77,7 +77,7 @@ const editKeys = [
   { key: 'Mod-t', run: toggleTodoLines },
   { key: 'Mod-.', run: toggleDone },
   { key: 'Shift-Mod-t', run: toggleLinePrefix('> ') },
-  { key: 'Ctrl-Mod-c', run: toggleCodeBlock },
+  { key: /Mac|iPhone|iPad/.test(navigator.platform) ? 'Ctrl-Mod-c' : 'Shift-Mod-c', run: toggleCodeBlock },
   { key: 'Alt-Mod-t', run: v => FORMATS.table(v) },
   // 日期
   { key: 'Shift-Mod-7', run: insertDate('dateTime') },
@@ -335,6 +335,13 @@ function remember() {
  * （不然换过去以后编辑器一直以为在拼字，新笔记里打的字都攒着不发）；等着存的附件作废（不然回来时会插到错的地方）。
  */
 function leaveNote() {
+  finishComposition();
+  for (const pending of pendingInserts) pending.cancelled = true;
+  pendingInserts.clear();
+}
+
+/** 保存时也要结束拼字，但不取消仍在等待的附件；取消只发生在离开笔记时。 */
+function finishComposition() {
   if (view.compositionStarted || view.composing) {
     const refocus = view.hasFocus;
     view.contentDOM.blur();
@@ -343,8 +350,6 @@ function leaveNote() {
     if (pendingWhileComposing) sendText();
     if (refocus) view.focus();
   }
-  for (const pending of pendingInserts) pending.cancelled = true;
-  pendingInserts.clear();
 }
 
 /** 没有选中笔记时：清空，只读。 */
@@ -373,13 +378,14 @@ function onMouseDown(event, v) {
   const target = event.target instanceof Element ? event.target : null;
   if (!target) return false;
   const link = target.closest('[data-url], [data-path]');
-  if (link && (event.metaKey || v.state.readOnly)) {
+  const modified = /Mac|iPhone|iPad/.test(navigator.platform) ? event.metaKey : event.ctrlKey;
+  if (link && (modified || v.state.readOnly)) {
     event.preventDefault();
     post({ type: 'open', url: link.dataset.url ?? null, path: link.dataset.path ?? null });
     return true;
   }
   const tag = target.closest('.cm-tag');
-  if (tag && event.metaKey) {
+  if (tag && modified) {
     event.preventDefault();
     post({ type: 'tag', name: tag.dataset.tag });
     return true;
@@ -635,6 +641,8 @@ window.bettermd = {
   setFocusMode: setFocusModeOn,
   insertAttachments: items => insertAttachments(items),
   focus: () => view.focus(),
+  flush: finishComposition,
+  prepareToLeave: leaveNote,
   view,
 };
 

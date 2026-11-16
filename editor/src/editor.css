@@ -17,9 +17,9 @@
   --emboss: 0 1px 0 rgba(255, 255, 255, .75);
   --grain-opacity: .05;
   --c-kw: #9b3d6f; --c-str: #a1452a; --c-num: #86601d; --c-com: #a79f92; --c-type: #3f6b62; --c-fn: #4b5d8a;
-  --font-body: "Iowan Old Style", "Songti SC", "Noto Serif SC", Georgia, serif;
-  --font-head: "Iowan Old Style", "Songti SC", "Noto Serif SC", Georgia, serif;
-  --font-quote: "Iowan Old Style", "Kaiti SC", "STKaiti", serif;
+  --font-body: "Iowan Old Style", "Songti SC", "Noto Serif CJK SC", "Noto Serif SC", Georgia, serif;
+  --font-head: "Iowan Old Style", "Songti SC", "Noto Serif CJK SC", "Noto Serif SC", Georgia, serif;
+  --font-quote: "Iowan Old Style", "Kaiti SC", "STKaiti", "Noto Serif CJK SC", serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }

@@ -24,6 +24,12 @@ function libraryRoot(configured, readAppSetting = appLibraryPath) {
 }
 
 function appLibraryPath() {
+  if (process.platform === 'linux') {
+    try {
+      const config = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'BetterMD', 'settings.json');
+      return JSON.parse(fs.readFileSync(config, 'utf8')).libraryPath || '';
+    } catch { return ''; }
+  }
   try {
     return execFileSync('defaults', ['read', 'app.bettermd.BetterMD', 'libraryPath'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {

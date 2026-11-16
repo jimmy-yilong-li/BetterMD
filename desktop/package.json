@@ -1,0 +1,44 @@
+{
+  "name": "bettermd-desktop",
+  "productName": "BetterMD",
+  "desktopName": "bettermd.desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "BetterMD Markdown 笔记本 Ubuntu 桌面版",
+  "author": { "name": "BetterMD contributors" },
+  "homepage": "https://github.com/jimmy-yilong-li/BetterMD",
+  "main": "main.cjs",
+  "scripts": {
+    "prepare:resources": "node prepare.cjs",
+    "start": "node electron-dev.cjs",
+    "test": "node --test test/*.test.cjs",
+    "test:smoke": "node test/smoke.cjs",
+    "pack": "electron-builder --linux dir",
+    "dist": "electron-builder --linux deb tar.gz"
+  },
+  "devDependencies": {
+    "electron": "45.3.2",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "app.bettermd.BetterMD",
+    "productName": "BetterMD",
+    "executableName": "bettermd",
+    "asar": true,
+    "directories": { "output": "../build/ubuntu" },
+    "files": ["*.cjs", "ui/**", "resources/**", "icons/**", "!test/**", "!electron-dev.cjs"],
+    "linux": {
+      "syncDesktopName": true,
+      "target": ["deb", "tar.gz"],
+      "category": "Office",
+      "icon": "icons",
+      "artifactName": "BetterMD-${version}-linux-${arch}.${ext}",
+      "desktop": { "entry": { "Name": "BetterMD", "Comment": "Markdown 笔记本", "StartupWMClass": "bettermd" } }
+    },
+    "deb": {
+      "maintainer": "BetterMD contributors",
+      "recommends": ["git", "fonts-noto-cjk"],
+      "depends": ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0", "libgbm1", "libasound2t64 | libasound2"]
+    }
+  }
+}

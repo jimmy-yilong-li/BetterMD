@@ -428,7 +428,7 @@
         "bettermd.libraryPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "「我的笔记」放在哪。空着就和 BetterMD App 用同一个（默认是 iCloud 云盘里的「我的笔记」）。"
+          "markdownDescription": "「我的笔记」放在哪。空着就和 BetterMD App 用同一个（macOS 默认在 iCloud 云盘，Ubuntu 默认在 ~/我的笔记）。"
         }
       }
     },
@@ -453,7 +453,7 @@
       {
         "view": "bettermd.library",
         "when": "!bettermd.libraryFound",
-        "contents": "没找到「我的笔记」。先打开一次 BetterMD App（它会在 iCloud 云盘里建好），或者在设置里指定位置。\n[打开设置](command:workbench.action.openSettings?%5B%22bettermd.libraryPath%22%5D)"
+        "contents": "没找到「我的笔记」。先打开一次 BetterMD App，或者在设置里指定笔记库位置。\n[打开设置](command:workbench.action.openSettings?%5B%22bettermd.libraryPath%22%5D)"
       }
     ]
   },

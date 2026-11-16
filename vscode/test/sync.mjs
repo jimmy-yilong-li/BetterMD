@@ -113,7 +113,8 @@ class FakeDocument {
 
 // ---- 无头 Chrome ----
 const port = 9400 + Math.floor(Math.random() * 500);
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
+const { chromePath } = await import('../../scripts/chrome.mjs');
+const chrome = spawn(chromePath(), [
   '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${mkdtempSync(join(tmpdir(), 'bettermd-vsc-'))}`,
   '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--allow-file-access-from-files', 'about:blank',
 ], { stdio: 'ignore' });

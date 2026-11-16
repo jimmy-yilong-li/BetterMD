@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { chromePath } from '../../scripts/chrome.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const page = resolve(here, '../dist/index.html');
@@ -14,7 +15,7 @@ const samplePNG = resolve(here, '../../App/Icon/icon-1024.png');
 
 // ---- 无头 Chrome ----
 const port = 9400 + Math.floor(Math.random() * 500);
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
+const chrome = spawn(chromePath(), [
   '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${mkdtempSync(join(tmpdir(), 'bettermd-test-'))}`,
   '--no-first-run', '--no-default-browser-check', '--disable-background-networking', 'about:blank',
 ], { stdio: 'ignore' });
@@ -70,7 +71,7 @@ const key = async (k, code, modifiers = 0, text, keyCode) => {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, modifiers });
   await delay(60);
 };
-const ALT = 1, CTRL = 2, META = 4, SHIFT = 8;
+const ALT = 1, CTRL = 2, META = process.platform === 'darwin' ? 4 : 2, SHIFT = 8;
 const type = async text => {
   for (const ch of text) {
     if (ch === '\n') await key('Enter', 'Enter', 0, '\r');
@@ -294,7 +295,7 @@ await styled('⌘L 列表', 'l', 'KeyL', META, 76, 'a', '- a');
 await styled('⇧⌘L 编号', 'L', 'KeyL', SHIFT | META, 76, 'a', '1. a');
 await styled('⇧⌘T 引用', 'T', 'KeyT', SHIFT | META, 84, 'a', '> a');
 await styled('⌘4 四级标题', '4', 'Digit4', META, 52, 'a', '#### a');
-await styled('⌃⌘C 选中的文字围成代码块', 'c', 'KeyC', CTRL | META, 67, 'let a = 1', '```\nlet a = 1\n```');
+await styled('代码块快捷键把选中文字围起来', 'c', 'KeyC', META | (process.platform === 'darwin' ? CTRL : SHIFT), 67, 'let a = 1', '```\nlet a = 1\n```');
 
 await setDoc('M', '一\n二\n三');
 await atText('一');
@@ -332,7 +333,7 @@ await key('f', 'KeyF', META);
 const swallowed = await run(`(() => {
   const input = document.querySelector('.cm-search input[name=search]');
   return ['b', 't', '1'].map(k => !input.dispatchEvent(new KeyboardEvent('keydown',
-    { key: k, code: k === '1' ? 'Digit1' : 'Key' + k.toUpperCase(), keyCode: k.toUpperCase().charCodeAt(0), metaKey: true, bubbles: true, cancelable: true })));
+    { key: k, code: k === '1' ? 'Digit1' : 'Key' + k.toUpperCase(), keyCode: k.toUpperCase().charCodeAt(0), metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true })));
 })()`);
 check('查找栏里的 ⌘B、⌘T、⌘1 被拦下，不会漏给菜单，也不改正文', swallowed.every(Boolean) && (await doc()) === '苹果 香蕉 苹果', JSON.stringify([swallowed, await doc()]));
 await run('window.bettermd.format("bold"); window.bettermd.format("todo")');
@@ -342,7 +343,7 @@ await key('Escape', 'Escape', 0, undefined, 27);
 await setDoc('CB', '```sh\n# 注释\necho hi\n```');
 await atText('echo');
 await key('t', 'KeyT', META);
-await key('c', 'KeyC', CTRL | META, undefined, 67);
+await key('c', 'KeyC', META | (process.platform === 'darwin' ? CTRL : SHIFT), undefined, 67);
 check('代码块里按 ⌘T、⌃⌘C 不改代码', (await doc()) === '```sh\n# 注释\necho hi\n```', JSON.stringify(await doc()));
 
 await setDoc('F2', '# 一节\n\n```sh\n# 注释\n```\n\n正文');
